@@ -129,25 +129,31 @@ their replies stay byte-identical with vision on. `VISION=0 ./start.sh restart` 
 
 ## Other languages
 
-MTP drafts may only propose tokens from a list, and TensorFold's default list (79,591 tokens) is English and code:
-it holds 50 Chinese characters and 433 Cyrillic tokens. Replies in other languages still come out right (every token
-is checked against the full vocabulary), but fewer drafts are accepted, so they decode slower. Patch 0009 adds each
-language's tokens on top of the default:
+**Recommended only for replies mostly in Chinese or Japanese; leave it off otherwise.**
+
+MTP drafts may only propose tokens from a list, and TensorFold's list (79,591 tokens) is English and code: it holds
+50 Chinese characters and 433 Cyrillic tokens. Replies in other languages still come out right (every token is
+checked against the full vocabulary), but fewer drafts are accepted, so they decode slower. A second image adds a
+language's tokens to that list (patch `patches/languages/0010`). It is opt-in: put the language in a `.env` file next
+to `start.sh` and restart.
 
 ```bash
-TENSORFOLD_DRAFT_VOCAB=zh ./start.sh restart        # de, fr, ja, pt, ru or zh; several: TENSORFOLD_DRAFT_VOCAB=zh,ja
+echo 'DRAFT_LANGUAGE=zh' >> .env     # or ja; several: zh,ja
+./start.sh restart                   # switches to the language image (pulled or built the first time)
 ```
 
-The output is byte-identical with any list; only speed changes. Measured on one Spark (one stream, recipe sampling,
-seed 1234, one boot per arm, 2026-09-29):
+Remove the line (or leave it empty) and `./start.sh restart` to go back to the default image. The output is
+byte-identical with either image; only speed changes. Measured on one Spark (one stream, recipe sampling, seed 1234,
+one boot per arm, 2026-09-29):
 
-| Replies in | Default list | Language list | Change |
+| Replies in | Default image | Language image | Change |
 | --- | --- | --- | --- |
 | Chinese, thinking off / on | 35.5 / 38.4 tok/s | 45.9 / 50.6 tok/s | **+29% / +32%** |
 | Japanese, thinking off / on | 39.5 / 46.0 tok/s | 46.9 / 49.2 tok/s | **+19% / +7%** |
 
-Russian, German, French and Portuguese lists are included but not yet measured on TensorFold (with the default list
-those replies decode at 42-50 tok/s). The lists come from the vLLM recipe's language draft vocabularies; see
+The larger list makes every draft step a little slower, which is why it does not pay off for English or code.
+`DRAFT_LANGUAGE` also accepts `ru`, `de`, `fr` and `pt`, but those have not been measured to help, so they are not
+recommended. The language token lists come from the vLLM recipe's language draft vocabularies; see
 [`CREDITS.md`](CREDITS.md).
 
 ## What `start.sh` and `scripts/prepare.sh` do
@@ -176,10 +182,11 @@ attached to the server's log and exits with its exit code (for a systemd unit).
 1. Preflight: Docker, the NVIDIA runtime, disk space.
 2. The image `tensorfold-qwen38:v0.3.6.3`: TensorFold v0.3.6.3 with every `patches/*.patch` applied, plus
    `transformers` (the vision tower) and PyAV (video decoding), on NVIDIA's PyTorch container
-   (`nvcr.io/nvidia/pytorch:26.07-py3`). It first tries the matching prebuilt image from GitHub
+   (`nvcr.io/nvidia/pytorch:26.07-py3`). With `DRAFT_LANGUAGE` set it is `tensorfold-qwen38:v0.3.6.3-languages`
+   instead, which also applies `patches/languages/*.patch`. It first tries the matching prebuilt image from GitHub
    Container Registry (`ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:v0.3.6.3-<patches hash>`,
-   ~11 GB); if that tag is not there (e.g. after you change `patches/`), or with `PULL=0`, it builds the image
-   locally instead (a few minutes).
+   ~11 GB; `:latest` is the default image, `:languages` the language image); if that tag is not there (e.g. after
+   you change `patches/`), or with `PULL=0`, it builds the image locally instead (a few minutes).
 3. Downloads the checkpoint into `~/.cache/huggingface` (resumable).
 4. Verifies the checkpoint with `tensorfold info`.
 
@@ -192,7 +199,8 @@ PREPARE=1 ./start.sh restart   # force prepare.sh, then restart; PREPARE=0 skips
 ```
 
 After changing `patches/`, `scripts/publish-image.sh` pushes the new image to GitHub Container Registry
-(`latest` and `v0.3.6.3-<patches hash>`).
+(`latest` and `v0.3.6.3-<patches hash>`), and `DRAFT_LANGUAGE=zh scripts/publish-image.sh` the language image
+(`languages` and its own `v0.3.6.3-<patches hash>`).
 
 ## KV pool and memory
 
@@ -249,7 +257,8 @@ fits.
 ## Configuration
 
 Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overridden from the environment
-(`PARALLEL=4 ./start.sh`) or with `tensorfold serve` flags (`./start.sh --context 131072`).
+(`PARALLEL=4 ./start.sh`), in a `.env` file next to `start.sh` (`KEY=value` lines, e.g. `PARALLEL=4`; the environment
+wins over it), or with `tensorfold serve` flags (`./start.sh --context 131072`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -259,6 +268,7 @@ Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overr
 | `PLE_ON_SSD` | `1` | read the 29.8 GiB n-gram tables from SSD instead of RAM, leaving that memory to the KV cache |
 | `VISION` | `1` | image and video input (`--vision`); `0` serves text only |
 | `VISION_URLS` | `0` | `1` also accepts public `https://` image and video URLs (default: data URLs only) |
+| `DRAFT_LANGUAGE` | empty | `zh` or `ja`: serve the language image, for replies mostly in that language ([Other languages](#other-languages)) |
 | `MTP_DRAFTS` / `MTP_CONFIDENCE` | `6` / `0.60` | at most 6 MTP drafts a round; a chain stops before a draft under 60% |
 | `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `0.95` / `20` | default sampling (Qwen's thinking-mode values); a request's own values win |
 | `THINKING` | `1` | open a think block by default; `0` answers directly unless a request asks to think |
@@ -266,8 +276,7 @@ Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overr
 | `PORT` / `HOST` | `8888` / `0.0.0.0` | where the API listens |
 | `TENSORFOLD_PREFILL_ROWS` | `2048` (`4096` with `VISION=0`) | rows per prompt chunk (patch 0006); 4,096 is 2-5% faster from 3k tokens and takes 0.94 GiB more |
 | `TENSORFOLD_MTP_COPY` | `1` | prompt-lookup drafts for text that repeats the prompt (patch 0007; needs `PARALLEL` >= 2); `0` turns them off |
-| `TENSORFOLD_DRAFT_VOCAB` | `default` | tokens MTP drafts may propose (patch 0009): `zh`, `ja`, `ru`, `de`, `fr`, `pt` or several (`zh,ja`) add that language's tokens to the English+code default; see [Other languages](#other-languages) |
-| `TENSORFOLD_MAX_IMAGES` / `TENSORFOLD_IMAGE_TOKENS` | `50` / `16384` | images a request may carry and the tokens they share, each at most 4,096 (patch 0010) |
+| `TENSORFOLD_MAX_IMAGES` / `TENSORFOLD_IMAGE_TOKENS` | `50` / `16384` | images a request may carry and the tokens they share, each at most 4,096 (patch 0009) |
 | `TENSORFOLD_VIDEO_TOKENS` | `16384` | a request's video token budget |
 | `TENSORFOLD_VISION_WORKSPACE_MIB` | `0` | what startup reserves for the vision tower's scratch |
 | `PREPARE` | `auto` | `start.sh` runs `scripts/prepare.sh` when needed; `1` always, `0` never |
@@ -310,8 +319,8 @@ applied with `patch -p0`), and `start.sh` rebuilds or re-pulls the image by itse
 | `0006-flash-next-prefill-rows` | configurable prompt chunk size (port of [#40](https://github.com/ashhart/TensorFold/pull/40)) | +2-5% at 4,096 rows |
 | `0007-flash-next-copy-drafts` | drafts copied from earlier text when the reply repeats the prompt | +6% on quoting and editing replies |
 | `0008-flash-next-vision` | image and video input for Flash Next on CUDA: the Qwen3.5 vision tower, interleaved 3-D rotary positions in the attention and sparse-attention kernels, video frames in timestamped blocks | `--vision` (TensorFold's own `--vision` covers only the dense 27B) |
-| `0009-flash-next-draft-languages` | draft vocabularies for Chinese, Japanese, Russian, German, French and Portuguese on top of the default English+code list, chosen with `TENSORFOLD_DRAFT_VOCAB` | faster decoding of replies in those languages ([Other languages](#other-languages)) |
-| `0010-flash-next-many-images` | up to 50 images a request sharing 16,384 tokens (4,096 at most an image), encoded by the vision tower in bounded runs; request bodies up to 96 MiB | many-image chats; one image is encoded exactly as before |
+| `0009-flash-next-many-images` | up to 50 images a request sharing 16,384 tokens (4,096 at most an image), encoded by the vision tower in bounded runs; request bodies up to 96 MiB | many-image chats; one image is encoded exactly as before |
+| `languages/0010-flash-next-draft-languages` | only in the opt-in language image (`DRAFT_LANGUAGE`): Chinese and Japanese (also Russian, German, French, Portuguese) tokens added to the list MTP drafts from | Chinese +29-32%, Japanese +7-19% decode ([Other languages](#other-languages)) |
 
 Typed tool-call parameters (this recipe's former patch 0001, [#75](https://github.com/ashhart/TensorFold/pull/75))
 are part of TensorFold v0.3.6.3.
@@ -342,7 +351,7 @@ start.sh      set up (first run) and start the server
 stop.sh       stop it
 scripts/      prepare.sh (image + checkpoint), config.sh (all settings), publish-image.sh (push the image to GHCR),
               banner.sh (start.sh's banner)
-patches/      patches baked into the image
+patches/      patches baked into the image; patches/languages/ only into the language image (DRAFT_LANGUAGE)
 tools/        benchmark and checks
 .github/      issue and pull request templates, GitHub Sponsors
 CREDITS.md    who and what this builds on

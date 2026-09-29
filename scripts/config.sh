@@ -1,5 +1,18 @@
 # Shared settings for start.sh, stop.sh and scripts/*.sh. Any value can be overridden from the environment,
-# e.g. `PORT=9000 ./start.sh` or `PULL=0 scripts/prepare.sh`.
+# e.g. `PORT=9000 ./start.sh` or `PULL=0 scripts/prepare.sh`, or set in ./.env: KEY=value lines, read here (never
+# run as a script); a variable already set in the environment wins over the file. .env is yours, not the repository's.
+if [[ -f .env ]]; then
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    [[ "$_line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    _key=${BASH_REMATCH[2]}; _value=${BASH_REMATCH[3]}
+    if [[ "$_value" =~ ^\"([^\"]*)\"[[:space:]]*(#.*)?$ || "$_value" =~ ^\'([^\']*)\'[[:space:]]*(#.*)?$ ]]; then
+      _value=${BASH_REMATCH[1]}
+    else
+      _value=${_value%%#*}; _value=${_value%"${_value##*[![:space:]]}"}
+    fi
+    [[ -n "${!_key+set}" ]] || export "$_key=$_value"
+  done < .env
+fi
 
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"   # MLX 4-bit, group size 32, with the MTP head
 # The patches and start.sh's flags are made for TensorFold v0.3.6.3 exactly (earlier releases lack --vision for
@@ -8,9 +21,15 @@ MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"   # MLX 4-bit, gr
 TF_VERSION="${TF_VERSION:-v0.3.6.3}"
 TF_REPO="${TF_REPO:-https://github.com/ashhart/TensorFold.git}"
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
-IMAGE="${IMAGE:-tensorfold-qwen38:${TF_VERSION}}"                 # the local image prepare.sh builds or pulls
+# Replies mostly in Chinese or Japanese: DRAFT_LANGUAGE=zh or ja (in .env) serves the second image, which adds that
+# language's tokens to the ones MTP drafts may propose (patches/languages/): faster decoding there, the same
+# output. English and code get a little slower with it, so leave it unset otherwise. Also accepted, not measured to help:
+# de, fr, pt, ru; several: "zh,ja". See the README's "Other languages" section.
+DRAFT_LANGUAGE="${DRAFT_LANGUAGE:-}"
+IMAGE="${IMAGE:-tensorfold-qwen38:${TF_VERSION}${DRAFT_LANGUAGE:+-languages}}"   # the local image prepare.sh builds or pulls
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"          # the server's container
-# The prebuilt image: prepare.sh pulls $GHCR_IMAGE:<TF_VERSION>-<patches hash>; publish-image.sh pushes it.
+# The prebuilt images: prepare.sh pulls $GHCR_IMAGE:<TF_VERSION>-<patches hash>; publish-image.sh pushes it (and
+# :latest, or :languages for the DRAFT_LANGUAGE image).
 GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold}"
 
 SERVED_NAME="${SERVED_NAME:-Qwen3.8-Flash-Next}"   # the model id clients see in /v1/models and replies (tensorfold --name)
@@ -50,7 +69,7 @@ if [[ "$VISION" == 1 ]]; then _rows=2048; else _rows=4096; fi
 export TENSORFOLD_PREFILL_ROWS="${TENSORFOLD_PREFILL_ROWS:-$_rows}"
 # What startup reserves for the vision tower's scratch (MiB); 0: it comes from the system reserve while it encodes.
 export TENSORFOLD_VISION_WORKSPACE_MIB="${TENSORFOLD_VISION_WORKSPACE_MIB:-0}"
-# Images a request may carry (patch 0010; a chat's turns all count) and the tokens they share, each image at most
+# Images a request may carry (patch 0009; a chat's turns all count) and the tokens they share, each image at most
 # 4,096 (one image is sized as before). The tower encodes them 16,384 patches at a time, the scratch one image needs.
 export TENSORFOLD_MAX_IMAGES="${TENSORFOLD_MAX_IMAGES:-50}"
 export TENSORFOLD_IMAGE_TOKENS="${TENSORFOLD_IMAGE_TOKENS:-16384}"
@@ -59,10 +78,8 @@ export TENSORFOLD_VIDEO_TOKENS="${TENSORFOLD_VIDEO_TOKENS:-16384}"
 # Prompt-lookup drafts ahead of MTP (patch 0007; with PARALLEL >= 2): +6% on replies that repeat the prompt, prose and
 # code unchanged. 0: off.
 export TENSORFOLD_MTP_COPY="${TENSORFOLD_MTP_COPY:-1}"
-# Which tokens MTP drafts may propose (patch 0009): "default" is TensorFold's 79,591-id English+code list. Replies
-# mostly in another language draft faster with that language's extension on top: de, fr, ja, pt, ru or zh, or several
-# ("zh,ja"). The output is identical either way; see the README's "Other languages" section.
-export TENSORFOLD_DRAFT_VOCAB="${TENSORFOLD_DRAFT_VOCAB:-default}"
+# The draft list the language image serves (DRAFT_LANGUAGE above).
+[[ -z "$DRAFT_LANGUAGE" ]] || export TENSORFOLD_DRAFT_VOCAB="$DRAFT_LANGUAGE"
 # No "is there a newer TensorFold" call to GitHub at each start: the patches are for v0.3.6.3 anyway. 0: check.
 export TENSORFOLD_NO_UPDATE_CHECK="${TENSORFOLD_NO_UPDATE_CHECK:-1}"
 
@@ -81,12 +98,22 @@ die()  { printf '%s[%s] ERROR:%s %s\n' "$(_c 2 '1;31')" "$(basename "$0")" "$(_c
 
 model_cache_dir() { echo "$HF_CACHE/hub/models--${MODEL_ID//\//--}"; }
 
+# start.sh and scripts/*.sh (not stop.sh, which must stop the server whatever the settings) check DRAFT_LANGUAGE.
+check_draft_language() {
+  local one='(de|fr|ja|pt|ru|zh)'
+  [[ -z "$DRAFT_LANGUAGE" || "$DRAFT_LANGUAGE" =~ ^$one(,$one)*$ ]] || \
+    die "DRAFT_LANGUAGE=$DRAFT_LANGUAGE: zh or ja (recommended), de, fr, pt or ru, or several like zh,ja"
+}
+# The patches baked into $IMAGE, in order: patches/*.patch, plus patches/languages/*.patch for DRAFT_LANGUAGE.
+patch_files() { ls patches/*.patch; [[ -z "$DRAFT_LANGUAGE" ]] || ls patches/languages/*.patch; }
+patches_hash() { patch_files 2>/dev/null | xargs -r cat | sha256sum | cut -c1-12; }
+
 # What scripts/prepare.sh last left ready (it writes this line to PREPARED_MARKER when it succeeds); start.sh runs
 # prepare.sh again whenever the current line differs: a missing or stale image, new patches, another model.
 PREPARED_MARKER="$KERNEL_CACHE/.prepared"
 prepared_state() {
   local hash label model=missing
-  hash=$(cat patches/*.patch 2>/dev/null | sha256sum | cut -c1-12)
+  hash=$(patches_hash)
   label=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$IMAGE" 2>/dev/null || echo missing)
   ls -d "$(model_cache_dir)"/snapshots/*/ >/dev/null 2>&1 && model=present
   echo "model=$MODEL_ID($model) image=$IMAGE($label) patches=$hash"

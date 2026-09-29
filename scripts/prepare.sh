@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prepare everything needed to serve Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP with TensorFold on one DGX Spark:
 #   1. preflight checks (docker, GPU runtime, disk space)
-#   2. the image: TensorFold plus patches/*.patch on NVIDIA's PyTorch container, pulled prebuilt from $GHCR_IMAGE
-#      when a matching tag is reachable (PULL=0 skips that), else built locally
+#   2. the image: TensorFold plus patches/*.patch (and patches/languages/*.patch with DRAFT_LANGUAGE) on NVIDIA's
+#      PyTorch container, pulled prebuilt from $GHCR_IMAGE when a matching tag is reachable (PULL=0 skips that), else
+#      built locally
 #   3. download the checkpoint into the Hugging Face cache (~106 GiB, resumable)
 #   4. verify the checkpoint with `tensorfold info`
 # ./start.sh runs this by itself when needed. Safe to re-run: every step skips work that is already done.
@@ -10,6 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."     # the repository root
 source ./scripts/config.sh
+check_draft_language
 
 REBUILD=0
 for arg in "$@"; do
@@ -34,7 +36,7 @@ docker info 2>/dev/null | grep -qi nvidia || warn "docker does not list an nvidi
 mkdir -p "$HF_CACHE/hub" "$KERNEL_CACHE/torch_extensions" "$KERNEL_CACHE/triton"
 
 mkdir -p patches
-PATCHES_HASH=$(cat patches/*.patch 2>/dev/null | sha256sum | cut -c1-12)
+PATCHES_HASH=$(patches_hash)
 built_hash=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$IMAGE" 2>/dev/null || true)
 
 # Disk: the checkpoint (~114 GB) if it is not downloaded yet, and the image (~24 GB, more while it unpacks) if it is
@@ -74,13 +76,17 @@ fi
 if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1 || [[ "$built_hash" != "$PATCHES_HASH" ]]; then
   docker image inspect "$BASE_IMAGE" >/dev/null 2>&1 && [[ $REBUILD -eq 0 ]] || { log "Pulling base image $BASE_IMAGE"; docker pull "$BASE_IMAGE"; }
 
-  log "Building $IMAGE (TensorFold $TF_VERSION, patches $PATCHES_HASH: $(ls patches/*.patch 2>/dev/null | xargs -rn1 basename | paste -sd' ' || true))"
+  log "Building $IMAGE (TensorFold $TF_VERSION, patches $PATCHES_HASH: $(patch_files 2>/dev/null | xargs -rn1 basename | paste -sd' ' || true))"
   nocache=(); [[ $REBUILD -eq 1 ]] && nocache=(--no-cache)
+  # the build context: this image's patches, side by side in the order they apply
+  context=$(mktemp -d)
+  trap 'rm -rf -- "$context"' EXIT
+  patch_files | xargs -r cp -t "$context"
   docker build "${nocache[@]}" -t "$IMAGE" \
     --build-arg BASE_IMAGE="$BASE_IMAGE" \
     --build-arg TF_SPEC="git+${TF_REPO}@${TF_VERSION}" \
     --build-arg PATCHES_HASH="$PATCHES_HASH" \
-    -f - patches <<'DOCKERFILE'
+    -f - "$context" <<'DOCKERFILE'
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
 FROM ${BASE_IMAGE}
 ARG TF_SPEC
