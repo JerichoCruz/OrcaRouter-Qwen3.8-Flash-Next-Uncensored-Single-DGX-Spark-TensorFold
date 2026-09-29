@@ -38,7 +38,11 @@ This repository is a thin layer of scripts and patches. Almost everything that m
 - `0007-flash-next-copy-drafts`: uses TensorFold's own `CopyIndex` prompt-lookup index from its Qwen3.5 27B engine.
 - `0008-flash-next-vision`: builds on TensorFold's Qwen3.5/3.8 dense vision support, runs the vision tower from
   Hugging Face transformers, and follows transformers' Qwen3.5 rotary index and Qwen3-VL's video processing.
-- `0002`-`0005`, `0007`, `0008`: by MiaAI-Lab, developed with [Claude Code](https://claude.com/claude-code).
+- `0009-flash-next-draft-languages`: the language token lists come from
+  **Javier ([jvr0x](https://github.com/jvr0x))**'s language draft vocabularies for this model's vLLM recipe
+  ([MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark#84](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/pull/84)),
+  built from each language's Wikipedia by token frequency; the patch keeps the ids TensorFold's default list lacks.
+- `0002`-`0005`, `0007`-`0009`: by MiaAI-Lab, developed with [Claude Code](https://claude.com/claude-code).
 
 ## Runtime stack
 

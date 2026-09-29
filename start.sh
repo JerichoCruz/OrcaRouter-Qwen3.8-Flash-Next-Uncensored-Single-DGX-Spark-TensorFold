@@ -13,14 +13,17 @@
 #   ./start.sh restart --parallel 8 --context 172000
 #   PARALLEL=3 KV_DTYPE=bf16 ./start.sh restart   # 256k at full KV precision
 #   VISION=0 ./start.sh restart        # text only (4,096-row prompt chunks, ~2-5% faster prefill)
+#   echo DRAFT_LANGUAGE=zh >> .env; ./start.sh restart   # replies mostly in Chinese (or ja): the language image
 # Extra arguments come after the defaults, so they win (the last value of a flag counts).
-# Env: PARALLEL, CONTEXT, KV_DTYPE, PLE_ON_SSD, VISION, VISION_URLS, MTP_DRAFTS, MTP_CONFIDENCE, TEMPERATURE, TOP_P, TOP_K, THINKING,
-#      SERVED_NAME, PORT, HOST, CONTAINER_NAME, IMAGE (see scripts/config.sh); TENSORFOLD_* (passed to the server);
+# Settings, from the environment or ./.env (KEY=value lines): PARALLEL, CONTEXT, KV_DTYPE, DRAFT_LANGUAGE, PLE_ON_SSD,
+#      VISION, VISION_URLS, MTP_DRAFTS, MTP_CONFIDENCE, TEMPERATURE, TOP_P, TOP_K, THINKING, SERVED_NAME, PORT, HOST,
+#      CONTAINER_NAME, IMAGE (see scripts/config.sh); TENSORFOLD_* (passed to the server);
 #      PREPARE (auto | 1 | 0); FOREGROUND=1 (stay attached, exit with the server's code); WAIT_TIMEOUT (seconds,
 #      default 1800); HF_HUB_OFFLINE=0 (let TensorFold reach the Hub; default serves from the local cache only)
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 source ./scripts/config.sh
+check_draft_language
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-1800}"
