@@ -126,6 +126,29 @@ By default only data URLs are accepted; `VISION_URLS=1` also lets the server fet
 and video prompts are not kept for prefix reuse. Text requests are unaffected: their replies stay byte-identical with
 vision on. `VISION=0 ./start.sh restart` serves text only.
 
+## Other languages
+
+MTP drafts may only propose tokens from a list, and TensorFold's default list (79,591 tokens) is English and code:
+it holds 50 Chinese characters and 433 Cyrillic tokens. Replies in other languages still come out right (every token
+is checked against the full vocabulary), but fewer drafts are accepted, so they decode slower. Patch 0009 adds each
+language's tokens on top of the default:
+
+```bash
+TENSORFOLD_DRAFT_VOCAB=zh ./start.sh restart        # de, fr, ja, pt, ru or zh; several: TENSORFOLD_DRAFT_VOCAB=zh,ja
+```
+
+The output is byte-identical with any list; only speed changes. Measured on one Spark (one stream, recipe sampling,
+seed 1234, one boot per arm, 2026-09-29):
+
+| Replies in | Default list | Language list | Change |
+| --- | --- | --- | --- |
+| Chinese, thinking off / on | 35.5 / 38.4 tok/s | 45.9 / 50.6 tok/s | **+29% / +32%** |
+| Japanese, thinking off / on | 39.5 / 46.0 tok/s | 46.9 / 49.2 tok/s | **+19% / +7%** |
+
+Russian, German, French and Portuguese lists are included but not yet measured on TensorFold (with the default list
+those replies decode at 42-50 tok/s). The lists come from the vLLM recipe's language draft vocabularies; see
+[`CREDITS.md`](CREDITS.md).
+
 ## What `start.sh` and `scripts/prepare.sh` do
 
 **`./start.sh`** works in five steps, each shown as it runs:
@@ -242,6 +265,7 @@ Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overr
 | `PORT` / `HOST` | `8888` / `0.0.0.0` | where the API listens |
 | `TENSORFOLD_PREFILL_ROWS` | `2048` (`4096` with `VISION=0`) | rows per prompt chunk (patch 0006); 4,096 is 2-5% faster from 3k tokens and takes 0.94 GiB more |
 | `TENSORFOLD_MTP_COPY` | `1` | prompt-lookup drafts for text that repeats the prompt (patch 0007; needs `PARALLEL` >= 2); `0` turns them off |
+| `TENSORFOLD_DRAFT_VOCAB` | `default` | tokens MTP drafts may propose (patch 0009): `zh`, `ja`, `ru`, `de`, `fr`, `pt` or several (`zh,ja`) add that language's tokens to the English+code default; see [Other languages](#other-languages) |
 | `TENSORFOLD_VIDEO_TOKENS` | `16384` | a request's video token budget |
 | `TENSORFOLD_VISION_WORKSPACE_MIB` | `0` | what startup reserves for the vision tower's scratch |
 | `PREPARE` | `auto` | `start.sh` runs `scripts/prepare.sh` when needed; `1` always, `0` never |
@@ -284,6 +308,7 @@ applied with `patch -p0`), and `start.sh` rebuilds or re-pulls the image by itse
 | `0006-flash-next-prefill-rows` | configurable prompt chunk size (port of [#40](https://github.com/ashhart/TensorFold/pull/40)) | +2-5% at 4,096 rows |
 | `0007-flash-next-copy-drafts` | drafts copied from earlier text when the reply repeats the prompt | +6% on quoting and editing replies |
 | `0008-flash-next-vision` | image and video input for Flash Next on CUDA: the Qwen3.5 vision tower, interleaved 3-D rotary positions in the attention and sparse-attention kernels, video frames in timestamped blocks | `--vision` (TensorFold's own `--vision` covers only the dense 27B) |
+| `0009-flash-next-draft-languages` | draft vocabularies for Chinese, Japanese, Russian, German, French and Portuguese on top of the default English+code list, chosen with `TENSORFOLD_DRAFT_VOCAB` | faster decoding of replies in those languages ([Other languages](#other-languages)) |
 
 Typed tool-call parameters (this recipe's former patch 0001, [#75](https://github.com/ashhart/TensorFold/pull/75))
 are part of TensorFold v0.3.6.3.

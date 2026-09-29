@@ -55,6 +55,10 @@ export TENSORFOLD_VIDEO_TOKENS="${TENSORFOLD_VIDEO_TOKENS:-16384}"
 # Prompt-lookup drafts ahead of MTP (patch 0007; with PARALLEL >= 2): +6% on replies that repeat the prompt, prose and
 # code unchanged. 0: off.
 export TENSORFOLD_MTP_COPY="${TENSORFOLD_MTP_COPY:-1}"
+# Which tokens MTP drafts may propose (patch 0009): "default" is TensorFold's 79,591-id English+code list. Replies
+# mostly in another language draft faster with that language's extension on top: de, fr, ja, pt, ru or zh, or several
+# ("zh,ja"). The output is identical either way; see the README's "Other languages" section.
+export TENSORFOLD_DRAFT_VOCAB="${TENSORFOLD_DRAFT_VOCAB:-default}"
 # No "is there a newer TensorFold" call to GitHub at each start: the patches are for v0.3.6.3 anyway. 0: check.
 export TENSORFOLD_NO_UPDATE_CHECK="${TENSORFOLD_NO_UPDATE_CHECK:-1}"
 
