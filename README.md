@@ -31,7 +31,7 @@ were measured with 4 streams x 262,144 tokens.
 | 1 | 62.4 tok/s | 62.4 tok/s | 152 ms |
 | 2 | 90.5 tok/s | 46.3 tok/s | 257 ms |
 | 4 | 106.7 tok/s | 28.9 tok/s | 436 ms |
-| 5 | **119+ tok/s** | – | – |
+| 5 | 119.3 tok/s | 27.0 tok/s | 528 ms |
 
 **Prefill**
 
