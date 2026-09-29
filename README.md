@@ -15,7 +15,7 @@ patches that make prompt processing about **1.7x faster** without changing a sin
 - Checkpoint: [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)
   (MLX 4-bit, group size 32, with the MTP draft head)
 - API model id: `Qwen3.8-Flash-Next`
-- KV pool: **1,310,720 tokens** (5 streams x 262,144, int8 KV cache)
+- KV pool: **1,310,720 tokens** (5 streams x 262,144, int8 KV cache, ~23.4 GiB), 25% more than 4 streams
 - One command: `./start.sh` sets everything up on the first run and starts the server; `./stop.sh` stops it
 
 ## Performance
@@ -140,16 +140,20 @@ TensorFold gives every stream its own cache for a full window, so the KV pool is
 | --- | ---: |
 | Streams (`PARALLEL`) | 5 |
 | Window per stream (`CONTEXT`, the model's native maximum) | 262,144 tokens |
-| **KV pool** | **1,310,720 tokens** |
+| **KV pool** | **1,310,720 tokens** (4 streams: 1,048,576) |
 | KV precision (`KV_DTYPE`) | int8 (an fp16 scale per 32 values) |
-| Cache memory | 22.5 GiB estimated (4.49 GiB a stream: the KV cache and the sparse-attention index; the server allocates 4,799 MiB a stream with its per-stream buffers) |
+| Memory a stream, allocated (server log) | 4,799 MiB: the KV cache, the sparse-attention index and the stream's own buffers |
+| **Memory for the pool, allocated** | **~23.4 GiB** (5 x 4,799 MiB) |
 
-Where the memory goes at the default setting:
+The server reports these at every start: `5 streams of 262144 prompt/reply tokens (4799 MiB a stream)` and
+`startup estimate 102.60 GiB within 103.64 GiB` (the budget varies a little from start to start).
+
+Where the memory goes at the default setting (TensorFold's startup estimate):
 
 | | GiB |
 | --- | ---: |
 | Model weights (the 29.8 GiB of n-gram tables stay on the SSD with `PLE_ON_SSD=1`) | 75.2 |
-| Stream caches (5 x 4.49) | 22.5 |
+| Stream caches (5 x 4.49, the context-sized part) | 22.5 |
 | Fixed buffers (DeltaNet states, decode windows, prompt-chunk scratch, 8 saved prompt states) | 4.9 |
 | **Startup estimate** | **102.6** |
 
