@@ -8,19 +8,20 @@
 </p>
 
 Serve **Qwen3.8 Flash Next** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with
-**4 concurrent requests at the full 262,144-token context**. It runs
+**5 concurrent requests at the full 262,144-token context**. It runs
 [TensorFold](https://github.com/ashhart/TensorFold) v0.3.6.2 in NVIDIA's PyTorch container, plus a small set of
 patches that make prompt processing about **1.7x faster** without changing a single output token.
 
 - Checkpoint: [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)
   (MLX 4-bit, group size 32, with the MTP draft head)
 - API model id: `Qwen3.8-Flash-Next`
-- Two commands: `scripts/prepare.sh` once, then `./start.sh` (and `./stop.sh` to stop it)
+- KV pool: **1,310,720 tokens** (5 streams x 262,144, int8 KV cache)
+- One command: `./start.sh` sets everything up on the first run and starts the server; `./stop.sh` stops it
 
 ## Performance
 
-One DGX Spark, the defaults in [`scripts/config.sh`](scripts/config.sh) (4 streams x 262,144 tokens, int8 KV cache, n-gram tables read
-from SSD, MTP drafting), measured through the OpenAI API.
+One DGX Spark with 4 streams x 262,144 tokens (the default before `PARALLEL` went to 5), int8 KV cache, n-gram tables
+read from SSD and MTP drafting, measured through the OpenAI API.
 
 **Decode, prose**
 
@@ -46,23 +47,26 @@ Every reply stayed byte-identical.
 
 ## Requirements
 
-- A DGX Spark (or another GB10 system with 128 GB unified memory) with nothing else large on the GPU: the server
-  budgets ~104 GiB, 75 GiB of it weights.
+- A DGX Spark (or another GB10 system with 128 GB unified memory) with nothing else large on the GPU: the default
+  setting needs ~115 GiB free when the server starts (see [KV pool and memory](#kv-pool-and-memory)).
 - Docker with the NVIDIA container runtime, and your user in the `docker` group.
-- ~130 GB free disk under `~/.cache/huggingface` for the first download (the checkpoint is ~106 GB).
+- ~160 GB free disk on a fresh machine: ~125 GB for the checkpoint download under `~/.cache/huggingface`
+  (~114 GB) and ~35 GB for the image under Docker's root (~24 GB); `scripts/prepare.sh` checks both.
 - Optional: the `hf` CLI on the host (faster, resumable download) and a Hugging Face token in
   `~/.cache/huggingface/token` or `HF_TOKEN`.
 
 ## Quick start
 
 ```bash
-git clone <this repo> && cd <this repo>
-scripts/prepare.sh   # builds the image (TensorFold + patches/), downloads and checks the checkpoint
-./start.sh           # starts the container on port 8888 and waits until the API answers
+git clone https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold.git
+cd Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+./start.sh
 ```
 
-The first start compiles the CUDA kernels for the GB10 (a few minutes, cached in `~/.cache/tensorfold-qwen38`);
-later starts load the weights in ~2.5 minutes. `start.sh` ends with a smoke test and prints the endpoint.
+That is all. The first run sets everything up (see below): it pulls the prebuilt image (~11 GB) and downloads the
+~106 GiB checkpoint, then compiles the CUDA kernels for the GB10 (a few minutes, once). Later starts take ~2.5 minutes to load the
+weights. `start.sh` shows each step, the server's log and the loading progress, runs a smoke test, prints
+`Qwen3.8-Flash-Next is now LIVE! on port 8888` with the endpoint, and returns you to the shell.
 
 ```bash
 curl -s http://<spark-address>:8888/v1/models
@@ -70,64 +74,152 @@ curl -s http://<spark-address>:8888/v1/models
 curl -s http://<spark-address>:8888/v1/chat/completions -H 'Content-Type: application/json' -d '{
   "model": "Qwen3.8-Flash-Next",
   "messages": [{"role": "user", "content": "Write a Python fibonacci function."}],
-  "max_tokens": 256
+  "max_tokens": 1000
 }'
 ```
 
 Any OpenAI client works with `base_url = "http://<spark-address>:8888/v1"` and the model `Qwen3.8-Flash-Next`.
 Streaming, tool calls (typed parameters, e.g. arrays come back as JSON arrays) and reasoning content are supported.
-
-Operations:
-
-```bash
-./stop.sh                               # stop the server and free the GPU memory
-docker logs -f qwen38-flash-next-tf     # server log
-curl -s http://<spark-address>:8888/health   # busy flag and live token totals
-```
-
-## Prebuilt image
-
-`scripts/prepare.sh` builds the image locally (TensorFold from source plus `patches/`, a few minutes). The same image
-is published to GitHub Container Registry, so you can pull it instead:
+The model thinks before it answers (`reasoning_content`), so give replies enough `max_tokens`.
 
 ```bash
-docker login ghcr.io          # a GitHub token with read:packages while the package is private
-docker pull ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:latest
-docker tag ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:latest tensorfold-qwen38:v0.3.6.2
-scripts/prepare.sh            # sees the image is already built from these patches; downloads the checkpoint
-./start.sh
+./start.sh restart                            # restart it, e.g. after changing a setting
+./stop.sh                                     # stop the server and free the GPU memory
+docker logs -f qwen38-flash-next-tf           # server log
+curl -s http://<spark-address>:8888/health    # busy flag and live token totals
 ```
 
-Tags: `latest`, and `v0.3.6.2-<patches hash>` for each set of patches. `scripts/publish-image.sh` pushes a new one.
+## What `start.sh` and `scripts/prepare.sh` do
+
+**`./start.sh`** works in five steps, each shown as it runs:
+
+1. **Setup:** runs `scripts/prepare.sh` whenever the setup is not ready: on the first run, after the patches change,
+   or with another model or image. It compares what `prepare.sh` last left ready with the current settings, so later
+   starts skip it instantly.
+2. **Checks:** the arguments (with TensorFold's own parser, in a throwaway container), the previous server, the
+   port and the free memory.
+3. **Launch:** `tensorfold serve` with the settings from `scripts/config.sh`.
+4. **Loading:** the server's log as it comes, and every 15 s the elapsed time and how much of the startup estimate is
+   on the GPU. If the server stops, the last log lines and the reason are shown.
+5. **Smoke test:** one chat completion, then the LIVE message and the endpoint.
+
+If the server is already running, `./start.sh` says so and leaves it alone; `./start.sh restart` stops it and
+starts it again. It stops the server only after the setup and the argument check pass, so a typo leaves the running
+server alone and the server is down only while it restarts. Stopping cuts off requests still running (`stop.sh` warns
+when there are any). Extra arguments go to `tensorfold serve` after the defaults, so they win
+(`./start.sh restart --context 131072`); `./start.sh --help` lists the options. `FOREGROUND=1 ./start.sh` stays
+attached to the server's log and exits with its exit code (for a systemd unit).
+
+**`scripts/prepare.sh`** does the one-time setup, and is safe to re-run (each step skips work already done):
+
+1. Preflight: Docker, the NVIDIA runtime, disk space.
+2. The image `tensorfold-qwen38:v0.3.6.2`: TensorFold v0.3.6.2 with every `patches/*.patch` applied, on NVIDIA's
+   PyTorch container (`nvcr.io/nvidia/pytorch:26.07-py3`). It first tries the matching prebuilt image from GitHub
+   Container Registry (`ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:v0.3.6.2-<patches hash>`,
+   ~11 GB); if that tag is not there (e.g. after you change `patches/`), or with `PULL=0`, it builds the image
+   locally instead (a few minutes).
+3. Downloads the checkpoint into `~/.cache/huggingface` (resumable).
+4. Verifies the checkpoint with `tensorfold info`.
+
+Run it yourself to download ahead of time or to rebuild the image from scratch:
+
+```bash
+scripts/prepare.sh             # set up without starting the server
+scripts/prepare.sh --rebuild   # rebuild the image from scratch
+PREPARE=1 ./start.sh restart   # force prepare.sh, then restart; PREPARE=0 skips the check
+```
+
+After changing `patches/`, `scripts/publish-image.sh` pushes the new image to GitHub Container Registry
+(`latest` and `v0.3.6.2-<patches hash>`).
+
+## KV pool and memory
+
+TensorFold gives every stream its own cache for a full window, so the KV pool is streams x window:
+
+| | Default |
+| --- | ---: |
+| Streams (`PARALLEL`) | 5 |
+| Window per stream (`CONTEXT`, the model's native maximum) | 262,144 tokens |
+| **KV pool** | **1,310,720 tokens** |
+| KV precision (`KV_DTYPE`) | int8 (an fp16 scale per 32 values) |
+| Cache memory | 22.5 GiB estimated (4.49 GiB a stream: the KV cache and the sparse-attention index; the server allocates 4,799 MiB a stream with its per-stream buffers) |
+
+Where the memory goes at the default setting:
+
+| | GiB |
+| --- | ---: |
+| Model weights (the 29.8 GiB of n-gram tables stay on the SSD with `PLE_ON_SSD=1`) | 75.2 |
+| Stream caches (5 x 4.49) | 22.5 |
+| Fixed buffers (DeltaNet states, decode windows, prompt-chunk scratch, 8 saved prompt states) | 4.9 |
+| **Startup estimate** | **102.6** |
+
+TensorFold's budget is the free memory at start (`MemAvailable`) minus a host reserve of a tenth of RAM (12.2 GiB),
+so ~103-104 GiB on an otherwise idle Spark. The reserve covers what the estimate leaves out (CUDA context, workspaces,
+the Python process) and the host itself: on the Spark's unified memory, running out tends to freeze the machine
+rather than fail an allocation. At the default setting the host kept at least 9.7 GiB free through a 195k-token
+prompt and 5 concurrent long requests.
+
+Other settings that fit the same budget (TensorFold's own estimate):
+
+| Setting | KV pool | Estimate | Note |
+| --- | ---: | ---: | --- |
+| `PARALLEL=4` (int8) | 1,048,576 | 97.8 GiB | more headroom |
+| `PARALLEL=5` (int8, default) | 1,310,720 | 102.6 GiB | |
+| `PARALLEL=6 CONTEXT=220000` (int8) | 1,320,000 | ~103 GiB | shorter windows, one more stream |
+| `PARALLEL=6 KV_DTYPE=int4` | 1,572,864 | 97.7 GiB | int4 changes outputs slightly; quality not measured here |
+| `PARALLEL=8 KV_DTYPE=int4 CONTEXT=250000` | 2,000,000 | ~103 GiB | tight |
+| `PARALLEL=3 KV_DTYPE=bf16` | 786,432 | 102.1 GiB | full-precision KV |
+
+A setting that does not fit is refused at startup, before any weights load, with a message naming a window that
+fits.
 
 ## Configuration
 
 Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overridden from the environment
-(`PARALLEL=2 ./start.sh`) or with `tensorfold serve` flags (`./start.sh --context 131072`).
+(`PARALLEL=4 ./start.sh`) or with `tensorfold serve` flags (`./start.sh --context 131072`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PARALLEL` | `4` | requests decoded together |
-| `CONTEXT` | `262144` | prompt + reply window per request |
+| `PARALLEL` | `5` | requests decoded together (streams) |
+| `CONTEXT` | `262144` | prompt + reply window per stream |
 | `KV_DTYPE` | `int8` | `bf16`, `int8` or `int4` KV cache |
 | `PLE_ON_SSD` | `1` | read the 29.8 GiB n-gram tables from SSD instead of RAM, leaving that memory to the KV cache |
 | `MTP_DRAFTS` / `MTP_CONFIDENCE` | `6` / `0.60` | at most 6 MTP drafts a round; a chain stops before a draft under 60% |
+| `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `0.95` / `20` | default sampling (Qwen's thinking-mode values); a request's own values win |
+| `THINKING` | `1` | open a think block by default; `0` answers directly unless a request asks to think |
 | `SERVED_NAME` | `Qwen3.8-Flash-Next` | the model id in `/v1/models` and in replies |
 | `PORT` / `HOST` | `8888` / `0.0.0.0` | where the API listens |
 | `TENSORFOLD_PREFILL_ROWS` | `4096` | rows per prompt chunk (patch 0007); `2048` is TensorFold's default |
-| `TENSORFOLD_MTP_COPY` | `1` | prompt-lookup drafts for text that repeats the prompt (patch 0008); `0` turns them off |
+| `TENSORFOLD_MTP_COPY` | `1` | prompt-lookup drafts for text that repeats the prompt (patch 0008; needs `PARALLEL` >= 2); `0` turns them off |
+| `PREPARE` | `auto` | `start.sh` runs `scripts/prepare.sh` when needed; `1` always, `0` never |
+| `PULL` | `1` | `prepare.sh` tries the prebuilt image first; `0` always builds locally |
+| `STOP_TIMEOUT` | `30` | seconds `stop.sh` gives the server to shut down before removing it |
 
-Any `TENSORFOLD_*` variable in the environment is passed into the container.
+Any `TENSORFOLD_*` variable in the environment is passed into the container (`TENSORFOLD_NO_UPDATE_CHECK=1`, the
+default, stops TensorFold asking GitHub for a newer release at each start). Less common settings are described in
+`scripts/config.sh`: `MODEL_ID`, `TF_VERSION`, `TF_REPO`, `BASE_IMAGE` (the patches are made for TensorFold v0.3.6.2;
+after changing any of these run `scripts/prepare.sh --rebuild`), `IMAGE`, `CONTAINER_NAME`, `GHCR_IMAGE`, `HF_CACHE`
+(default `$HF_HOME` or `~/.cache/huggingface`), `KERNEL_CACHE`, `MIN_FREE_GB`, `IMAGE_FREE_GB`. `start.sh` also takes
+`FOREGROUND=1`, `WAIT_TIMEOUT` (seconds, default 1800) and `HF_HUB_OFFLINE=0` (let the server reach Hugging Face; by
+default it serves from the local cache only).
 
-**Memory.** All streams share one pool, so windows x streams x KV bytes must fit. The default fits in 97.8 GiB of the
-~103 GiB budget. Other combinations that fit at 262k: 3 streams with bf16 KV, or 8 streams with int4 KV (tight). With
-8 streams at int8 the window tops out near 172k. The server refuses a setting that does not fit, and names one that
-does.
+### Thinking and sampling
+
+By default the model thinks before it answers, with Qwen's recommended thinking-mode sampling: temperature 1.0,
+top_p 0.95, top_k 20. TensorFold has no min_p, presence penalty or repetition penalty, which is the same as
+min_p 0.0, presence_penalty 0.0 and repetition_penalty 1.0; requests that send those fields are served as if they
+had not. Per request:
+
+- `temperature`, `top_p`, `top_k` and `seed` override the defaults (`temperature: 0` decodes greedily).
+- `"chat_template_kwargs": {"enable_thinking": false}` answers without thinking, and
+  `"chat_template_kwargs": {"reasoning_effort": "low"}` (or `"xhigh"`) sets Qwen's reasoning effort; without it the
+  template's default (medium) applies. A top-level OpenAI-style `reasoning_effort` field is ignored.
+- The reasoning comes back in `reasoning_content`, the answer in `content`.
 
 ## What the patches change
 
-`scripts/prepare.sh` bakes every `patches/*.patch` into the image (unified diffs against TensorFold's site-packages, applied
-with `patch -p0`) and rebuilds the image automatically when the patches change.
+`scripts/prepare.sh` bakes every `patches/*.patch` into the image (unified diffs against TensorFold's site-packages,
+applied with `patch -p0`), and `start.sh` rebuilds or re-pulls the image by itself when the patches change.
 
 | Patch | Change | Effect |
 | --- | --- | --- |
@@ -148,7 +240,8 @@ one-token-at-a-time reference.
 
 ## Checks
 
-The scripts in `tools/` talk to the running server (`PORT` env var, default 8888):
+The scripts in `tools/` talk to the running server (`API_URL`, default `http://127.0.0.1:8888`; or just `PORT`),
+from this machine or another one (`API_URL=http://<spark-address>:8888 tools/bench.py`):
 
 | Script | What it does |
 | --- | --- |
@@ -159,20 +252,32 @@ The scripts in `tools/` talk to the running server (`PORT` env var, default 8888
 ## Repository layout
 
 ```
-start.sh      start the server
+start.sh      set up (first run) and start the server
 stop.sh       stop it
-scripts/      prepare.sh (image + checkpoint), config.sh (all settings), publish-image.sh (push to GHCR)
+scripts/      prepare.sh (image + checkpoint), config.sh (all settings), publish-image.sh (push the image to GHCR),
+              banner.sh (start.sh's banner)
 patches/      patches baked into the image
 tools/        benchmark and checks
+.github/      issue and pull request templates, GitHub Sponsors
+CREDITS.md    who and what this builds on
 ```
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE). TensorFold is MIT-licensed too; the model weights carry their own license.
+MIT, see [`LICENSE`](LICENSE), which also carries TensorFold's MIT notice for the patches. The model weights, downloaded from Hugging Face and not
+part of this repository, are under the Qwen Community License 1.0.
+
+**Third-party software in the image.** The prebuilt image (and the one `scripts/prepare.sh` builds) is based on
+NVIDIA's PyTorch container `nvcr.io/nvidia/pytorch:26.07-py3`, redistributed as a value-added runtime image. The NVIDIA
+software in it is governed by the [NVIDIA Software License Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-license-agreement/)
+and the [Product-Specific Terms for NVIDIA AI Products](https://www.nvidia.com/en-us/agreements/enterprise-software/product-specific-terms-for-ai-products/),
+which the container prints at every start (it shows in `start.sh`'s output); by pulling or running the image you
+accept them. The MIT license above
+covers this repository's scripts and patches only.
 
 ## Credits
 
-- [TensorFold](https://github.com/ashhart/TensorFold) by ashhart: the inference engine.
-- [Vontra](https://huggingface.co/Vontra): the MLX 4-bit checkpoint with the MTP head.
-- MovieMaker93: the original prompt chunk size change ([TensorFold #40](https://github.com/ashhart/TensorFold/pull/40)),
-  ported here as patch 0007.
+Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart ([ashhart](https://github.com/ashhart)), [Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
+by Qwen, and [Vontra's MLX 4-bit checkpoint](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP), with a
+prompt-chunk change by MovieMaker93 ([TensorFold #40](https://github.com/ashhart/TensorFold/pull/40)). The full list,
+including the runtime stack and licenses, is in [`CREDITS.md`](CREDITS.md).

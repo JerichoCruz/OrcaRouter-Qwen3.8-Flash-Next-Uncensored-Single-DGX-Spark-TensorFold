@@ -61,6 +61,6 @@ assignees: ""
 
 <!--
      Does this change memory use or output? A setting that raises memory can make the
-     server refuse to start at 4 x 262,144 tokens; a patch that changes output is not
+     server refuse to start at 5 x 262,144 tokens; a patch that changes output is not
      acceptable. Say so here if it does.
 -->

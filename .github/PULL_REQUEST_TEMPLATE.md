@@ -65,5 +65,5 @@
 - [ ] My change is reproducible and verified (script syntax check, `scripts/prepare.sh`, a launch, or a re-measurement).
 - [ ] A patch change keeps every reply byte-identical, and I said how I checked it.
 - [ ] I updated the README and/or `scripts/config.sh` if a setting, default, or measured number changed.
-- [ ] If my change affects memory, I checked the startup estimate still fits the budget at the default 4 x 262,144 int8 setting.
+- [ ] If my change affects memory, I checked the startup estimate still fits the budget at the default 5 x 262,144 int8 setting.
 - [ ] Defaults in `scripts/config.sh` still work out of the box; a new setting has a sane fallback like the existing ones.

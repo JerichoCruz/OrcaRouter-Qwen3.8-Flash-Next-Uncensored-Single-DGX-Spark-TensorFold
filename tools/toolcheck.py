@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """A tool call with an array parameter must come back with that argument as a JSON array (patch 0001).
 
-Usage: tools/toolcheck.py      (PORT env var, default 8888). Exit code 1 on failure.
+Usage: tools/toolcheck.py      (API_URL / PORT as in bench.py). Exit code 1 on failure.
 """
 import json
-import os
 import sys
 import urllib.request
 
-URL = f"http://127.0.0.1:{os.environ.get('PORT', '8888')}/v1/chat/completions"
+sys.dont_write_bytecode = True           # no tools/__pycache__ from importing bench
+from bench import URL, open_url  # noqa: E402
 TOOLS = [{"type": "function", "function": {
     "name": "add_tags", "description": "Attach tags to a document.",
     "parameters": {"type": "object", "required": ["doc_id", "tags"], "properties": {
@@ -20,7 +20,7 @@ def main() -> None:
     body = {"model": "Qwen3.8-Flash-Next", "max_tokens": 1024, "temperature": 0, "tools": TOOLS,
             "messages": [{"role": "user", "content": "Tag document 42 with 'urgent', 'finance' and 'q3' using the tool."}]}
     req = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    msg = json.load(urllib.request.urlopen(req, timeout=600))["choices"][0]["message"]
+    msg = json.load(open_url(req, 600))["choices"][0]["message"]
     calls = msg.get("tool_calls") or []
     ok = False
     for c in calls:

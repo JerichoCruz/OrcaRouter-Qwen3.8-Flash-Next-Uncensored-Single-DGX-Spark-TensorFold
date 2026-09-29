@@ -1,5 +1,5 @@
---- tensorfold/cuda/reply_text.py	2026-09-28 21:28:24.000000000 +0300
-+++ tensorfold/cuda/reply_text.py	2026-09-28 22:38:57.769123040 +0300
+--- tensorfold/cuda/reply_text.py
++++ tensorfold/cuda/reply_text.py
 @@ -8,6 +8,7 @@
  from typing import Any
  

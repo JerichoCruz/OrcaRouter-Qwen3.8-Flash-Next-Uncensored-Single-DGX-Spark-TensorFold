@@ -1,9 +1,9 @@
 diff --git tensorfold/families/qwen4_exp/cuda/ssd_read.cpp tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
 new file mode 100644
-index 0000000..9fec65a
+index 0000000..2c70d87
 --- /dev/null
 +++ tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,139 @@
 +// Flash Next's n-gram rows from the checkpoint: a batch of preads on a persistent pool of threads, without the GIL.
 +#include <torch/extension.h>
 +
@@ -86,13 +86,14 @@ index 0000000..9fec65a
 +      uint8_t* dst = out_ + r[3];
 +      while (done < size) {
 +        ssize_t got = pread(fd, dst + done, static_cast<size_t>(size - done), offset + done);
-+        if (got < 0 && errno == EINTR) continue;
++        const int err = errno;          // before anything else (the lock below) can change it
++        if (got < 0 && err == EINTR) continue;
 +        if (got <= 0) {
 +          std::lock_guard<std::mutex> lock(m_);
 +          if (error_.empty()) {
 +            error_ = got == 0 ? "short read of the n-gram tables at byte " + std::to_string(offset + done) +
 +                                    ": the checkpoint changed"
-+                              : std::string("reading the n-gram tables: ") + std::strerror(errno);
++                              : std::string("reading the n-gram tables: ") + std::strerror(err);
 +          }
 +          next_.store(n_);            // the rest of the batch is abandoned
 +          return;

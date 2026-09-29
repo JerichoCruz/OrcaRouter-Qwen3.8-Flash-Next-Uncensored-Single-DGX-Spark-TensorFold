@@ -16,15 +16,17 @@ tag="${TF_VERSION}-${hash}"
 token="${GHCR_TOKEN:-${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}}"
 [[ -n "$token" ]] || die "no GitHub token: run gh auth login -s write:packages, or set GHCR_TOKEN"
 user="${GHCR_USER:-$(gh api user --jq .login 2>/dev/null || echo "${GHCR_IMAGE#ghcr.io/}" | cut -d/ -f1)}"
-echo "$token" | docker login ghcr.io -u "$user" --password-stdin >/dev/null
 
 log "Labelling $IMAGE as $GHCR_IMAGE:$tag"
 docker build -q -t "$GHCR_IMAGE:$tag" -t "$GHCR_IMAGE:latest" \
   --label org.opencontainers.image.source="$REPO_URL" \
   --label org.opencontainers.image.description="Qwen3.8 Flash Next on one DGX Spark: TensorFold $TF_VERSION with patches $hash" \
-  --label org.opencontainers.image.licenses=MIT \
   - <<<"FROM $IMAGE" >/dev/null
 log "Pushing $GHCR_IMAGE:$tag and :latest (~24 GB uncompressed; only changed layers upload)"
-docker push "$GHCR_IMAGE:$tag"
-docker push "$GHCR_IMAGE:latest"
+# log in with a throwaway Docker config, so no registry credential stays in ~/.docker after the push
+login_dir=$(mktemp -d)
+trap 'rm -rf -- "$login_dir"' EXIT
+echo "$token" | DOCKER_CONFIG="$login_dir" docker login ghcr.io -u "$user" --password-stdin >/dev/null
+DOCKER_CONFIG="$login_dir" docker push "$GHCR_IMAGE:$tag"
+DOCKER_CONFIG="$login_dir" docker push "$GHCR_IMAGE:latest"
 log "Done: docker pull $GHCR_IMAGE:$tag"

@@ -4,7 +4,7 @@
 Every prompt is fresh random prose (a new seed per run), so the prompt cache never hits and each prompt looks up
 n-gram rows it has not touched before. Reports the server's own prefill seconds and decode tokens/s.
 
-Usage: tools/bench.py [label]      (PORT env var, default 8888; DECODE_ONLY=1 skips prefill)
+Usage: tools/bench.py [label]      (API_URL, default http://127.0.0.1:$PORT with PORT 8888; DECODE_ONLY=1 skips prefill)
 """
 import json
 import os
@@ -12,9 +12,11 @@ import random
 import statistics
 import sys
 import time
+import urllib.error
 import urllib.request
 
-URL = f"http://127.0.0.1:{os.environ.get('PORT', '8888')}/v1/chat/completions"
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:" + os.environ.get("PORT", "8888")).rstrip("/")
+URL = API_URL + "/v1/chat/completions"
 WORDS = ("time year people way day man thing woman life child world school state family student group country "
          "problem hand part place case week company system program question work government number night point "
          "home water room mother area money story fact month lot right study book eye job word business issue "
@@ -28,10 +30,21 @@ SIZES = [(1_000, 3), (4_000, 3), (16_000, 2), (64_000, 1)]      # (approx prompt
 def prose(tokens: int, seed: int) -> str:
     rng = random.Random(seed)
     out = []
-    while len(out) < tokens * 0.72:                              # ~1.4 tokens a word with punctuation
+    while len(out) < tokens * 0.72:          # ~1.14 tokens a word: the prompt comes out at ~0.82 x tokens
         sentence = [rng.choice(WORDS) for _ in range(rng.randint(6, 16))]
         out += sentence[:-1] + [sentence[-1] + "."]
     return " ".join(out)
+
+
+def open_url(req: urllib.request.Request, timeout: float):
+    """urlopen, with a one-line message instead of a traceback when the server is not there or refuses."""
+
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"the server at {API_URL} answered {exc.code}: {exc.read().decode(errors='replace')[:300]}")
+    except urllib.error.URLError as exc:
+        sys.exit(f"cannot reach the server at {API_URL} ({exc.reason}): is it running? (./start.sh)")
 
 
 def run(prompt: str, max_tokens: int, temperature=None) -> dict:
@@ -41,7 +54,7 @@ def run(prompt: str, max_tokens: int, temperature=None) -> dict:
         body["temperature"] = temperature
     req = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     start, first, stats = time.time(), None, {}
-    for line in urllib.request.urlopen(req, timeout=3600):
+    for line in open_url(req, 3600):
         line = line.decode().strip()
         if not line.startswith("data:") or line.endswith("[DONE]"):
             continue
@@ -65,8 +78,10 @@ def main() -> None:
         assert all(r.get("cached", 0) == 0 for r in rs), "prompt cache hit: prompts are not fresh"
         n = statistics.median(r["prompt_tokens"] for r in rs)
         pre = statistics.median(r["prefill_s"] for r in rs)
-        print(f"prefill {n:>7,.0f} tok: {pre:7.2f} s  {n / pre:6.0f} tok/s  TTFT {statistics.median(r['ttft'] for r in rs):6.2f} s"
-              f"  ({runs} run{'s' * (runs > 1)}, each {', '.join(f'{r['prefill_s']:.2f}' for r in rs)} s)")
+        ttft = statistics.median(r["ttft"] for r in rs)
+        each = ", ".join("%.2f" % r["prefill_s"] for r in rs)
+        print(f"prefill {n:>7,.0f} tok: {pre:7.2f} s  {n / pre:6.0f} tok/s  TTFT {ttft:6.2f} s"
+              f"  ({runs} run{'s' if runs > 1 else ''}, each {each} s)")
     for name, prompt, temp in (("code greedy", "Write a Python quicksort with docstring and tests.", 0),
                                ("chat sampled", "Explain why the sky is blue in a few paragraphs.", None)):
         rs = [run(prompt, 256, temp) for _ in range(5)]
