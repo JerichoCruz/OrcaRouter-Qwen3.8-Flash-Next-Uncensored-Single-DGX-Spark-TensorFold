@@ -50,6 +50,10 @@ if [[ "$VISION" == 1 ]]; then _rows=2048; else _rows=4096; fi
 export TENSORFOLD_PREFILL_ROWS="${TENSORFOLD_PREFILL_ROWS:-$_rows}"
 # What startup reserves for the vision tower's scratch (MiB); 0: it comes from the system reserve while it encodes.
 export TENSORFOLD_VISION_WORKSPACE_MIB="${TENSORFOLD_VISION_WORKSPACE_MIB:-0}"
+# Images a request may carry (patch 0010; a chat's turns all count) and the tokens they share, each image at most
+# 4,096 (one image is sized as before). The tower encodes them 16,384 patches at a time, the scratch one image needs.
+export TENSORFOLD_MAX_IMAGES="${TENSORFOLD_MAX_IMAGES:-50}"
+export TENSORFOLD_IMAGE_TOKENS="${TENSORFOLD_IMAGE_TOKENS:-16384}"
 # The whole video's token budget (Qwen3-VL's per-frame sizing; 2 frames a second, at most 256 frames).
 export TENSORFOLD_VIDEO_TOKENS="${TENSORFOLD_VIDEO_TOKENS:-16384}"
 # Prompt-lookup drafts ahead of MTP (patch 0007; with PARALLEL >= 2): +6% on replies that repeat the prompt, prose and

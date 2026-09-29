@@ -119,12 +119,13 @@ OpenAI's Python client, pass the same dicts in `messages`.
 | | Images | Videos |
 | --- | --- | --- |
 | Formats | JPEG, PNG, WebP | MP4, WebM, MOV, MKV (anything FFmpeg decodes) |
-| Per request | up to 4, 10 MB each, 20 MB in all | up to 2, 64 MB each, 96 MB in all, up to an hour of footage |
-| Tokens | up to 4,096 for all images (`"detail": "low"`: 256 an image) | 2 frames a second (at most 256 frames, spread over the whole video), each pair of frames one timestamped block; up to 16,384 tokens a request (`TENSORFOLD_VIDEO_TOKENS`) |
+| Per request | up to 50 (all of a chat's turns count), 10 MB each, 64 MB in all | up to 2, 64 MB each, 96 MB in all, up to an hour of footage |
+| Tokens | up to 16,384 for all images, at most 4,096 an image (50 images: ~320 each; `"detail": "low"`: 256 an image) | 2 frames a second (at most 256 frames, spread over the whole video), each pair of frames one timestamped block; up to 16,384 tokens a request (`TENSORFOLD_VIDEO_TOKENS`) |
 
 By default only data URLs are accepted; `VISION_URLS=1` also lets the server fetch public `https://` URLs. Image
-and video prompts are not kept for prefix reuse. Text requests are unaffected: their replies stay byte-identical with
-vision on. `VISION=0 ./start.sh restart` serves text only.
+and video prompts are not kept for prefix reuse, so each turn of a chat with images processes them again. A request
+body can be up to 96 MiB (base64 makes data URLs a third larger than the files). Text requests are unaffected:
+their replies stay byte-identical with vision on. `VISION=0 ./start.sh restart` serves text only.
 
 ## Other languages
 
@@ -266,6 +267,7 @@ Every setting lives in [`scripts/config.sh`](scripts/config.sh) and can be overr
 | `TENSORFOLD_PREFILL_ROWS` | `2048` (`4096` with `VISION=0`) | rows per prompt chunk (patch 0006); 4,096 is 2-5% faster from 3k tokens and takes 0.94 GiB more |
 | `TENSORFOLD_MTP_COPY` | `1` | prompt-lookup drafts for text that repeats the prompt (patch 0007; needs `PARALLEL` >= 2); `0` turns them off |
 | `TENSORFOLD_DRAFT_VOCAB` | `default` | tokens MTP drafts may propose (patch 0009): `zh`, `ja`, `ru`, `de`, `fr`, `pt` or several (`zh,ja`) add that language's tokens to the English+code default; see [Other languages](#other-languages) |
+| `TENSORFOLD_MAX_IMAGES` / `TENSORFOLD_IMAGE_TOKENS` | `50` / `16384` | images a request may carry and the tokens they share, each at most 4,096 (patch 0010) |
 | `TENSORFOLD_VIDEO_TOKENS` | `16384` | a request's video token budget |
 | `TENSORFOLD_VISION_WORKSPACE_MIB` | `0` | what startup reserves for the vision tower's scratch |
 | `PREPARE` | `auto` | `start.sh` runs `scripts/prepare.sh` when needed; `1` always, `0` never |
@@ -309,6 +311,7 @@ applied with `patch -p0`), and `start.sh` rebuilds or re-pulls the image by itse
 | `0007-flash-next-copy-drafts` | drafts copied from earlier text when the reply repeats the prompt | +6% on quoting and editing replies |
 | `0008-flash-next-vision` | image and video input for Flash Next on CUDA: the Qwen3.5 vision tower, interleaved 3-D rotary positions in the attention and sparse-attention kernels, video frames in timestamped blocks | `--vision` (TensorFold's own `--vision` covers only the dense 27B) |
 | `0009-flash-next-draft-languages` | draft vocabularies for Chinese, Japanese, Russian, German, French and Portuguese on top of the default English+code list, chosen with `TENSORFOLD_DRAFT_VOCAB` | faster decoding of replies in those languages ([Other languages](#other-languages)) |
+| `0010-flash-next-many-images` | up to 50 images a request sharing 16,384 tokens (4,096 at most an image), encoded by the vision tower in bounded runs; request bodies up to 96 MiB | many-image chats; one image is encoded exactly as before |
 
 Typed tool-call parameters (this recipe's former patch 0001, [#75](https://github.com/ashhart/TensorFold/pull/75))
 are part of TensorFold v0.3.6.3.
