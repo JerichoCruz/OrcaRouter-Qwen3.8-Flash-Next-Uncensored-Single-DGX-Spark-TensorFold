@@ -84,11 +84,14 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1 || [[
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
 FROM ${BASE_IMAGE}
 ARG TF_SPEC
-RUN pip install --no-cache-dir --upgrade "${TF_SPEC}" && tensorfold --version
+# transformers (the vision tower's modules) and PyAV (video decoding) for --vision
+RUN pip install --no-cache-dir --upgrade "${TF_SPEC}" && pip install --no-cache-dir "transformers==5.17.0" av && \
+    tensorfold --version
 COPY . /opt/tf-patches
 RUN cd "$(python -c 'import os, tensorfold; print(os.path.dirname(os.path.dirname(tensorfold.__file__)))')" && \
     for p in /opt/tf-patches/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; patch -p0 --forward < "$p" || exit 1; done && \
-    python -c "import tensorfold.cuda.reply_text"
+    python -c "import tensorfold.cuda.server, tensorfold.vision.qwen_cuda, tensorfold.vision.videos, av; \
+from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5VisionModel"
 ARG PATCHES_HASH
 LABEL tf.patches=${PATCHES_HASH}
 ENV HF_HOME=/root/.cache/huggingface \

@@ -16,10 +16,11 @@ This repository is a thin layer of scripts and patches. Almost everything that m
 
 - **[TensorFold](https://github.com/ashhart/TensorFold)** by Ash Hart ([ashhart](https://github.com/ashhart)) and the TensorFold contributors (MIT License):
   the engine that serves the model, including the CUDA engine for Qwen3.8 Flash Next, MTP drafting with exact
-  verification, the quantized KV cache and the OpenAI-compatible server. Every file in `patches/` is a modification of
-  TensorFold v0.3.6.2.
+  verification, the quantized KV cache, the OpenAI-compatible server and the Qwen image pipeline (image input,
+  preprocessing and the CUDA vision frontend) that patch 0008 extends to Flash Next. Every file in `patches/` is a
+  modification of TensorFold v0.3.6.3.
 - TensorFold itself builds on, and credits in its
-  [third-party notices](https://github.com/ashhart/TensorFold/blob/v0.3.6.2/THIRD_PARTY_NOTICES.md):
+  [third-party notices](https://github.com/ashhart/TensorFold/blob/v0.3.6.3/THIRD_PARTY_NOTICES.md):
   [MLX](https://github.com/ml-explore/mlx) and [mlx-lm](https://github.com/ml-explore/mlx-lm) (Apple, MIT),
   [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) (Prince Canuma, MIT),
   [ExLlamaV3](https://github.com/turboderp-org/exllamav3) (turboderp, MIT), whose cache quantization scheme the int8 and int4
@@ -29,12 +30,15 @@ This repository is a thin layer of scripts and patches. Almost everything that m
 
 ## Patches
 
-- `0001-cuda-typed-tool-parameters` and `0002-cuda-live-token-counters`: by MiaAI-Lab, submitted upstream as
-  [TensorFold #75](https://github.com/ashhart/TensorFold/pull/75) and [#79](https://github.com/ashhart/TensorFold/pull/79).
-- `0007-flash-next-prefill-rows`: a port of [TensorFold #40](https://github.com/ashhart/TensorFold/pull/40) by
-  **MovieMaker93**, rebased onto v0.3.6.2.
-- `0008-flash-next-copy-drafts`: uses TensorFold's own `CopyIndex` prompt-lookup index from its Qwen3.5 27B engine.
-- `0003`-`0006`, `0008`: by MiaAI-Lab, developed with [Claude Code](https://claude.com/claude-code).
+- `0001-cuda-live-token-counters`: by MiaAI-Lab, submitted upstream as
+  [TensorFold #79](https://github.com/ashhart/TensorFold/pull/79). The recipe's earlier typed-tool-parameters patch
+  ([#75](https://github.com/ashhart/TensorFold/pull/75)) is part of TensorFold v0.3.6.3.
+- `0006-flash-next-prefill-rows`: a port of [TensorFold #40](https://github.com/ashhart/TensorFold/pull/40) by
+  **MovieMaker93**, rebased onto v0.3.6.3.
+- `0007-flash-next-copy-drafts`: uses TensorFold's own `CopyIndex` prompt-lookup index from its Qwen3.5 27B engine.
+- `0008-flash-next-vision`: builds on TensorFold's Qwen3.5/3.8 dense vision support, runs the vision tower from
+  Hugging Face transformers, and follows transformers' Qwen3.5 rotary index and Qwen3-VL's video processing.
+- `0002`-`0005`, `0007`, `0008`: by MiaAI-Lab, developed with [Claude Code](https://claude.com/claude-code).
 
 ## Runtime stack
 
@@ -43,10 +47,14 @@ This repository is a thin layer of scripts and patches. Almost everything that m
   libraries. Governed by the NVIDIA Software License Agreement and the Product-Specific Terms for NVIDIA AI Products;
   see the README's License section.
 - **[PyTorch](https://pytorch.org/)** (BSD-3-Clause): tensors, CUDA streams and the C++ extension builder that compiles
-  the native n-gram reader in patch 0004.
+  the native n-gram reader in patch 0003.
 - **[Triton](https://github.com/triton-lang/triton)** (MIT): the language most of TensorFold's Flash Next CUDA kernels,
-  and the tiled attention-block select in patch 0005, are written in.
-- **[NumPy](https://numpy.org/)** (BSD-3-Clause): the host-side n-gram lookups and read planning.
+  and the tiled attention-block select in patch 0004, are written in.
+- **[NumPy](https://numpy.org/)** (BSD-3-Clause): the host-side n-gram lookups and read planning, and video patches.
+- **[Hugging Face transformers](https://github.com/huggingface/transformers)** (Apache 2.0): the Qwen vision tower's
+  modules and the image processor.
+- **[PyAV](https://github.com/PyAV-Org/PyAV)** (BSD-3-Clause) and **[FFmpeg](https://ffmpeg.org/)** (LGPL): video
+  decoding. **[Pillow](https://python-pillow.org/)** (MIT-CMU): image decoding.
 - **[Hugging Face Hub](https://huggingface.co/)**: model hosting, the `hf` CLI and `huggingface_hub` (Apache 2.0), and
   the [safetensors](https://github.com/huggingface/safetensors) format (Apache 2.0) the checkpoint ships in.
 - **[Docker](https://www.docker.com/)** and the

@@ -1,5 +1,5 @@
 diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
-index f550931..de3bdfc 100644
+index ee444c2..0944f8f 100644
 --- tensorfold/cuda/geometry.py
 +++ tensorfold/cuda/geometry.py
 @@ -3,12 +3,25 @@
@@ -8,7 +8,7 @@ index f550931..de3bdfc 100644
  import math
 +import os
 +
- from .capacity import Geometry, SIZES
+ from .capacity import Geometry, itemsize
  
 -PREFILL_ROWS = 2048     # a prompt chunk's rows: Flash Next and GLM keep buffers of this many rows
 +PREFILL_ROWS = 2048     # a prompt chunk's rows: GLM keeps buffers of this many rows
@@ -26,8 +26,8 @@ index f550931..de3bdfc 100644
 +    return rows
 +
 +
- def size(info: dict) -> int:
-     return math.prod(info["shape"]) * SIZES[info["dtype"]]
+ def size(info: dict, name: str = "tensor") -> int:
+     return math.prod(info["shape"]) * itemsize(info, name)
  
 @@ -133,7 +146,7 @@ def layer_counts(t: dict) -> tuple[int, int]:
  
@@ -69,7 +69,7 @@ index f550931..de3bdfc 100644
      def bytes_at(capacity: int) -> int:
          blocks = (capacity + ratio - 1) // ratio
 diff --git tensorfold/families/qwen4_exp/cuda/decode.py tensorfold/families/qwen4_exp/cuda/decode.py
-index 47ad88f..55d1a60 100644
+index 316133a..4bbca0b 100644
 --- tensorfold/families/qwen4_exp/cuda/decode.py
 +++ tensorfold/families/qwen4_exp/cuda/decode.py
 @@ -105,7 +105,7 @@ def _gathered_fits(sampling: Sampling | None) -> bool:
@@ -82,10 +82,10 @@ index 47ad88f..55d1a60 100644
  
  class Engine:
 diff --git tensorfold/families/qwen4_exp/cuda/engine.py tensorfold/families/qwen4_exp/cuda/engine.py
-index b0fc313..d29b49c 100644
+index a42e8b0..41abe5a 100644
 --- tensorfold/families/qwen4_exp/cuda/engine.py
 +++ tensorfold/families/qwen4_exp/cuda/engine.py
-@@ -37,7 +37,8 @@ class FlashNextEngine:
+@@ -39,7 +39,8 @@ class FlashNextEngine:
          from .kvcache import BITS_OF, check as check_kv
          from .weights import draft_token_ids, load
          from tensorfold.cuda.capacity import admit, gather_ints
@@ -95,7 +95,7 @@ index b0fc313..d29b49c 100644
  
          if tp not in (1, 2) or rank not in range(tp):
              raise ValueError(f"rank {rank} of {tp}: Flash Next runs on one GPU or two")
-@@ -62,10 +63,14 @@ class FlashNextEngine:
+@@ -64,10 +65,14 @@ class FlashNextEngine:
              self.comm.barrier()
          gather = (lambda values: gather_ints(torch, self.comm.all_gather, values)) if tp == 2 else None
          each, mtp, bits = self.depth + 1, self.depth > 0, BITS_OF[self.kv_dtype]
@@ -112,7 +112,7 @@ index b0fc313..d29b49c 100644
          if exl3:
              geometry = admission(geometry)
          self.capacity_plan = admit(model_dir, max_len, context_explicit, torch, geometry,
-@@ -91,11 +96,12 @@ class FlashNextEngine:
+@@ -93,11 +98,12 @@ class FlashNextEngine:
  
              self.e = None
              self.multi = MultiDecoder(w, slots=streams, capacity=self.max_len, depth=self.depth,

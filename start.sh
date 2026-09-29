@@ -5,14 +5,16 @@
 # Stop it with ./stop.sh.
 #
 # Usage: ./start.sh [restart] [extra tensorfold serve args]
-#   ./start.sh                         # scripts/config.sh defaults: 5 streams x 262,144 tokens, int8 KV, --ple-on-ssd
+#   ./start.sh                         # scripts/config.sh defaults: 5 streams x 262,144 tokens, int8 KV, --ple-on-ssd,
+#                                      # image and video input (--vision)
 #                                      # (if the server already runs, says so and leaves it alone)
 #   ./start.sh restart                 # stop the running server (./stop.sh), then start it again, e.g. to apply
 #                                      # changed settings or patches; the new arguments are checked before stopping
 #   ./start.sh restart --parallel 8 --context 172000
 #   PARALLEL=3 KV_DTYPE=bf16 ./start.sh restart   # 256k at full KV precision
+#   VISION=0 ./start.sh restart        # text only (4,096-row prompt chunks, ~2-5% faster prefill)
 # Extra arguments come after the defaults, so they win (the last value of a flag counts).
-# Env: PARALLEL, CONTEXT, KV_DTYPE, PLE_ON_SSD, MTP_DRAFTS, MTP_CONFIDENCE, TEMPERATURE, TOP_P, TOP_K, THINKING,
+# Env: PARALLEL, CONTEXT, KV_DTYPE, PLE_ON_SSD, VISION, VISION_URLS, MTP_DRAFTS, MTP_CONFIDENCE, TEMPERATURE, TOP_P, TOP_K, THINKING,
 #      SERVED_NAME, PORT, HOST, CONTAINER_NAME, IMAGE (see scripts/config.sh); TENSORFOLD_* (passed to the server);
 #      PREPARE (auto | 1 | 0); FOREGROUND=1 (stay attached, exit with the server's code); WAIT_TIMEOUT (seconds,
 #      default 1800); HF_HUB_OFFLINE=0 (let TensorFold reach the Hub; default serves from the local cache only)
@@ -34,6 +36,8 @@ SERVE_ARGS=(--name "$SERVED_NAME" --parallel "$PARALLEL" --context "$CONTEXT" --
             --mtp-drafts "$MTP_DRAFTS" --mtp-confidence "$MTP_CONFIDENCE"
             --temperature "$TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K")
 [[ "$PLE_ON_SSD" == 1 ]] && SERVE_ARGS+=(--ple-on-ssd)
+[[ "$VISION" == 1 ]] && SERVE_ARGS+=(--vision)
+[[ "$VISION" == 1 && "$VISION_URLS" == 1 ]] && SERVE_ARGS+=(--vision-urls)
 if [[ "$THINKING" == 1 ]]; then SERVE_ARGS+=(--thinking); else SERVE_ARGS+=(--no-thinking); fi
 SERVE_ARGS+=("$@")
 # The effective value of a flag (its last occurrence, as --flag value or --flag=value).
@@ -149,7 +153,7 @@ fi
 # ---------------------------------------------------------------- 4. load, with the server's log and a heartbeat
 step 4 "Loading: ~75 GiB of weights (~2.5 min; the very first start also compiles CUDA kernels)"
 # NVIDIA's container banner, without its license notice (GOVERNING TERMS ...), which stays visible
-NOISE='^\s*$|^=+$|^== PyTorch ==|^NVIDIA Release|Copyright|All rights reserved|PyTorch Version|Various files include|NOTE: CUDA Forward|Using CUDA|cuda-compatibility|Container image'
+NOISE='^\s*$|^=+$|^== PyTorch ==|^NVIDIA Release|Copyright|All rights reserved|PyTorch Version|Various files include|NOTE: CUDA Forward|Using CUDA|cuda-compatibility|Container image|torch/utils/_pytree\.py.*register_constant'
 # docker logs is the background job, so killing it ends the whole pipeline (no orphaned `docker logs -f`)
 docker logs -f "$CONTAINER_NAME" > >(grep --line-buffered -v -E "$NOISE" | sed -u "s/^/  ${D}│${R} /") 2>&1 &
 LOGS_PID=$!

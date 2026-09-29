@@ -1,8 +1,8 @@
 diff --git tensorfold/cuda/streams.py tensorfold/cuda/streams.py
-index a7f7427..c4a0802 100644
+index 5a56bc3..b8ca82c 100644
 --- tensorfold/cuda/streams.py
 +++ tensorfold/cuda/streams.py
-@@ -28,6 +28,8 @@ class Stream:
+@@ -30,6 +30,8 @@ class Stream:
      error: Exception | None = None                        # why a stream ended without finishing
      done: bool = False
      rounds: int = 0
@@ -11,7 +11,7 @@ index a7f7427..c4a0802 100644
      min_rows: int = 0
      cached: int = 0
      prefill_s: float = 0.0
-@@ -44,13 +46,18 @@ class Stream:
+@@ -46,13 +48,18 @@ class Stream:
              self.done = True
              self.finished = time.perf_counter()
  
@@ -33,10 +33,10 @@ index a7f7427..c4a0802 100644
  
  def accept(tokens: Sequence[int], parents: Sequence[int], sampled: Sequence[int], room: int,
 diff --git tensorfold/families/qwen3_5/cuda/multi.py tensorfold/families/qwen3_5/cuda/multi.py
-index e7a6014..e31348d 100644
+index 2c8ae8b..5d88138 100644
 --- tensorfold/families/qwen3_5/cuda/multi.py
 +++ tensorfold/families/qwen3_5/cuda/multi.py
-@@ -302,7 +302,7 @@ class MultiDecoder:
+@@ -332,7 +332,7 @@ class MultiDecoder:
              s.committed.extend(tokens[r] for r in path)
              if s.draft and self.drafts:
                  drafting.append((s, taps.index_select(0, take)))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A tool call with an array parameter must come back with that argument as a JSON array (patch 0001).
+"""A tool call with an array parameter must come back with that argument as a JSON array (typed by the schema).
 
 Usage: tools/toolcheck.py      (API_URL / PORT as in bench.py). Exit code 1 on failure.
 """

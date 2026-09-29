@@ -186,18 +186,18 @@ index 0000000..133d9ba
 +
 +    return read
 diff --git tensorfold/families/qwen4_exp/cuda/weights.py tensorfold/families/qwen4_exp/cuda/weights.py
-index 764ba21..924de3d 100644
+index 2bae392..cfd1d23 100644
 --- tensorfold/families/qwen4_exp/cuda/weights.py
 +++ tensorfold/families/qwen4_exp/cuda/weights.py
-@@ -14,6 +14,7 @@ import torch
- from ..host_table import HostTable, ReadAhead, read_header as _header
+@@ -14,6 +14,7 @@ from ..host_table import BF16Table, HostTable, ReadAhead, open_table, read_heade
  from ..ssd_table import SSDTable
+ from .bf16 import b16_from_rows, make_b16, quantize4, stack_b16
  from .ngram import NGram
 +from .ssd_read import native_reader
  from tensorfold.cuda import experts as grouped
  
  from .qmm import Q4, dequantize, make_q4, stack_q4
-@@ -450,7 +451,7 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+@@ -515,7 +516,7 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
              h = headers[shard]
              files.append((model_dir / shard, h[key + ".weight"], h[key + ".scales"], h[key + ".biases"]))
          # from SSD, a prompt chunk's rows are read on a thread while the GPU runs the chunk before (the same bytes)
@@ -207,7 +207,7 @@ index 764ba21..924de3d 100644
              raise ValueError(f"n-gram tables hold {table.rows} rows, expected {ngram.rows}")
          conv = raw(name + ".conv1d.weight").reshape(cfg.streams * cfg.hidden, cfg.ple_kernel).to(torch.bfloat16)
 diff --git tensorfold/families/qwen4_exp/ssd_table.py tensorfold/families/qwen4_exp/ssd_table.py
-index 89acdc3..584ab3b 100644
+index aae4ad1..0f3ef56 100644
 --- tensorfold/families/qwen4_exp/ssd_table.py
 +++ tensorfold/families/qwen4_exp/ssd_table.py
 @@ -12,6 +12,7 @@ from pathlib import Path
@@ -229,7 +229,7 @@ index 89acdc3..584ab3b 100644
          self._fds: list[int] = []
          self._pool = ThreadPoolExecutor(WORKERS, thread_name_prefix="ple-ssd")
          self._closer = weakref.finalize(self, _release, self._fds, self._pool)
-@@ -122,6 +125,8 @@ class SSDTable:
+@@ -125,6 +128,8 @@ class SSDTable:
          unique, inverse = np.unique(flat.astype(np.int64), return_inverse=True)
          shard = np.searchsorted(self.starts, unique, side="right") - 1
          local, where = unique - self.starts[shard], self.fidx[shard]
@@ -238,7 +238,7 @@ index 89acdc3..584ab3b 100644
          outs, reads = [], []
          for part, width in enumerate((self.wrow, self.grow, self.grow)):
              outs.append(np.empty((unique.size, width), dtype=np.uint8))
-@@ -134,6 +139,35 @@ class SSDTable:
+@@ -137,6 +142,35 @@ class SSDTable:
          words, scales, biases = (out[inverse] for out in outs)
          return words.view(np.uint32), scales.view(np.uint16), biases.view(np.uint16)
  
