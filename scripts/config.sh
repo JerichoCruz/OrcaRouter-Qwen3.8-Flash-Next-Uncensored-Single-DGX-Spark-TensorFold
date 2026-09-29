@@ -7,6 +7,7 @@ TF_REPO="${TF_REPO:-https://github.com/ashhart/TensorFold.git}"
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
 IMAGE="${IMAGE:-tensorfold-qwen38:${TF_VERSION}}"
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"
+GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold}"   # scripts/publish-image.sh
 
 SERVED_NAME="${SERVED_NAME:-Qwen3.8-Flash-Next}"   # the model id clients see in /v1/models and replies (tensorfold --name)
 HOST="${HOST:-0.0.0.0}"

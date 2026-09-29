@@ -1,4 +1,11 @@
-# Qwen3.8 Flash Next on one DGX Spark (TensorFold)
+<h1 align="center">Qwen3.8 Flash Next on one DGX Spark (TensorFold)</h1>
+
+<p align="center">
+  <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
+  <br><br>
+  <a href="https://github.com/sponsors/MiaAI-Lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Sponsor%20me%20on%20GitHub-181717?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor me on GitHub" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
+  <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
+</p>
 
 Serve **Qwen3.8 Flash Next** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with
 **4 concurrent requests at the full 262,144-token context**. It runs
@@ -8,7 +15,7 @@ patches that make prompt processing about **1.7x faster** without changing a sin
 - Checkpoint: [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)
   (MLX 4-bit, group size 32, with the MTP draft head)
 - API model id: `Qwen3.8-Flash-Next`
-- Two commands: `scripts/prepare.sh` once, then `./start.sh`
+- Two commands: `scripts/prepare.sh` once, then `./start.sh` (and `./stop.sh` to stop it)
 
 ## Performance
 
@@ -73,10 +80,25 @@ Streaming, tool calls (typed parameters, e.g. arrays come back as JSON arrays) a
 Operations:
 
 ```bash
+./stop.sh                               # stop the server and free the GPU memory
 docker logs -f qwen38-flash-next-tf     # server log
-docker rm -f qwen38-flash-next-tf       # stop
 curl -s http://<spark-address>:8888/health   # busy flag and live token totals
 ```
+
+## Prebuilt image
+
+`scripts/prepare.sh` builds the image locally (TensorFold from source plus `patches/`, a few minutes). The same image
+is published to GitHub Container Registry, so you can pull it instead:
+
+```bash
+docker login ghcr.io          # a GitHub token with read:packages while the package is private
+docker pull ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:latest
+docker tag ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:latest tensorfold-qwen38:v0.3.6.2
+scripts/prepare.sh            # sees the image is already built from these patches; downloads the checkpoint
+./start.sh
+```
+
+Tags: `latest`, and `v0.3.6.2-<patches hash>` for each set of patches. `scripts/publish-image.sh` pushes a new one.
 
 ## Configuration
 
@@ -138,7 +160,8 @@ The scripts in `tools/` talk to the running server (`PORT` env var, default 8888
 
 ```
 start.sh      start the server
-scripts/      prepare.sh (image + checkpoint) and config.sh (all settings)
+stop.sh       stop it
+scripts/      prepare.sh (image + checkpoint), config.sh (all settings), publish-image.sh (push to GHCR)
 patches/      patches baked into the image
 tools/        benchmark and checks
 ```
