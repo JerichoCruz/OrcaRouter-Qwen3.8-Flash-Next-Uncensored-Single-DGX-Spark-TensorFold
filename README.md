@@ -20,8 +20,9 @@ patches that make prompt processing about **1.7x faster** without changing a sin
 
 ## Performance
 
-One DGX Spark with 4 streams x 262,144 tokens (the default before `PARALLEL` went to 5), int8 KV cache, n-gram tables
-read from SSD and MTP drafting, measured through the OpenAI API.
+One DGX Spark, int8 KV cache, n-gram tables read from SSD and MTP drafting, measured through the OpenAI API. The 5
+concurrent requests row is from the current default (5 streams x 262,144 tokens); the other rows and the prefill table
+were measured with 4 streams x 262,144 tokens.
 
 **Decode, prose**
 
@@ -30,6 +31,7 @@ read from SSD and MTP drafting, measured through the OpenAI API.
 | 1 | 62.4 tok/s | 62.4 tok/s | 152 ms |
 | 2 | 90.5 tok/s | 46.3 tok/s | 257 ms |
 | 4 | 106.7 tok/s | 28.9 tok/s | 436 ms |
+| 5 | **119+ tok/s** | – | – |
 
 **Prefill**
 
