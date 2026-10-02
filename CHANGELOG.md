@@ -9,7 +9,7 @@ release ends at is given, and the prebuilt images are
 
 ## [0.6.0] - 2026-10-02
 
-Commit `5840c51` (#13). Images unchanged from 0.5.0.
+Commit `22a3010` (#13). Images unchanged from 0.5.0.
 
 ### Changed
 
@@ -21,7 +21,7 @@ Commit `5840c51` (#13). Images unchanged from 0.5.0.
 
 ## [0.5.0] - 2026-10-02
 
-Commit `92f1e23` (#12). TensorFold **v0.6.1** (`17c73e1`). Images `v0.6.1-797af1d9df4d` (`:latest`) and
+Commit `78a14eb` (#12). TensorFold **v0.6.1** (`17c73e1`). Images `v0.6.1-797af1d9df4d` (`:latest`) and
 `v0.6.1-f8a0b4cb702b` (`:languages`).
 
 ### Changed
@@ -56,7 +56,7 @@ Measured against v0.6.0: identical tokens in 34 greedy replies, and prefill and 
 
 ## [0.4.1] - 2026-10-01
 
-Commit `c506d4c`. Documentation only.
+Commit `d88f37c`. Documentation only.
 
 ### Changed
 
