@@ -1,10 +1,7 @@
 <h1 align="center">Qwen3.8 Flash Next on one DGX Spark (TensorFold)</h1>
 
 <p align="center">
-  <sub>a fork of <a href="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold">MiaAI-Lab's Qwen3.8 Flash Next recipe</a> by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
-  <br><br>
-  <a href="https://github.com/sponsors/MiaAI-Lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Sponsor%20me%20on%20GitHub-181717?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor me on GitHub" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
-  <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
+  <sub>a fork of <a href="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold">MiaAI-Lab's Qwen3.8 Flash Next recipe</a> by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a> — original recipe by <a href="https://x.com/MiaAI_lab">Mia</a></sub>
 </p>
 
 Serve **Qwen3.8 Flash Next** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with
@@ -48,8 +45,8 @@ defaults that fit it are unchanged. See orcarouter's
 
 One DGX Spark, the recipe's defaults on TensorFold v0.6.1 (5 streams x 262,144, int8 KV cache, n-gram tables read
 from SSD, image input on, MTP drafting), measured through the OpenAI API. Measured on Vontra's conversion of the
-official weights; the uncensored checkpoint is the same layout and size, so the tables are the reference here too
-(`tools/bench.py` re-measures it).
+official weights; the uncensored checkpoint is the same layout and size, and `tools/bench.py` confirms it lands in
+the same range — a smoke run measured prefill 2,407 tok/s at 50k tokens and 69.7 tok/s decoding code greedily.
 
 **Decode, prose**
 
@@ -253,7 +250,9 @@ attached to the server's log and exits with its exit code (for a systemd unit).
    It first tries the matching prebuilt image from GitHub
    Container Registry (`ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:v0.6.1-<patches hash>`,
    ~11 GB; `:latest` is the default image, `:languages` the language image); if that tag is not there (e.g. after
-   you change `patches/`), or with `PULL=0`, it builds the image locally instead (a few minutes).
+   you change `patches/`), or with `PULL=0`, it builds the image locally instead (a few minutes). A fork whose
+   `patches/` are unchanged reuses upstream's prebuilt image (the hash matches); point `GHCR_IMAGE` at your own
+   namespace and run `scripts/publish-image.sh` to publish your own.
 3. Runs `scripts/convert.sh` when `MODEL_DIR` is not converted yet: downloads the BF16 source into
    `~/.cache/huggingface` (resumable), converts it to the MLX-4bit layout, checks it and marks it converted (see
    [Convert](#convert)).
@@ -407,6 +406,7 @@ from this machine or another one (`API_URL=http://<spark-address>:8888 tools/ben
 | Script | What it does |
 | --- | --- |
 | `tools/bench.py [label]` | smoke: prefill at ~0.85k / 3.2k / 12.6k / 50k tokens (fresh random prompts) and a short decode check. `--suite --seed 1 --jsonl run.jsonl --clients 1,2,4,5` is the concurrent, fixed-seed driver |
+| `tools/check_flash_next.py` | verifies the *converted checkpoint* (no server): `sample` compares 51 tensors byte for byte against Vontra's conversion over HTTP range reads, `layout OUT_DIR` compares the output index's names, shapes, dtypes and shard co-location. Run by `scripts/convert.sh` |
 | `tools/test_copy_draft_rows.py` | mixed copy/MTP proposal-row ownership (needs `TF_SRC` pointing at patched TensorFold `src`; no model) |
 | `tools/test_astra_patches.py` | first-token-before-draft, MTP absorb-without-head, PLE concat, native worker counts (`TF_SRC`) |
 | `tools/needle.py` | hides a passphrase in a ~195k-token prompt and checks the model returns it |
@@ -429,8 +429,14 @@ CREDITS.md    who and what this builds on
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE), which also carries TensorFold's MIT notice for the patches. The model weights, downloaded from Hugging Face and not
-part of this repository, are under the Qwen Community License 1.0.
+MIT, see [`LICENSE`](LICENSE), which also carries TensorFold's MIT notice for the patches. This repository's scripts
+and patches are MIT; the model checkpoint is **not** part of this repository.
+
+The served checkpoint is converted from
+[`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored), which
+orcarouter releases under **Apache-2.0**; that license governs the uncensored checkpoint. Qwen's base weights, which
+it builds on, remain under the **Qwen Community License 1.0**. Read the relevant license before commercial use, in
+particular its terms for Model-as-a-Service businesses.
 
 **Third-party software in the image.** The prebuilt image (and the one `scripts/prepare.sh` builds) is based on
 NVIDIA's PyTorch container `nvcr.io/nvidia/pytorch:26.07-py3`, redistributed as a value-added runtime image. The NVIDIA
@@ -438,13 +444,7 @@ software in it is governed by the [NVIDIA Software License Agreement](https://ww
 and the [Product-Specific Terms for NVIDIA AI Products](https://www.nvidia.com/en-us/agreements/enterprise-software/product-specific-terms-for-ai-products/),
 which the container prints at every start (it shows in `start.sh`'s output); by pulling or running the image you
 accept them. The image also contains Hugging Face `transformers` (Apache 2.0) and PyAV (BSD) with its FFmpeg
-libraries (LGPL). The MIT license above covers this repository's scripts and patches only.
-
-The served checkpoint, converted from
-[`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored) (Apache
-2.0) and layered on Qwen's weights, is not part of this repository; it is downloaded from Hugging Face at first run.
-The model weights themselves are under the Qwen Community License 1.0 (the uncensored checkpoint carries its own
-Apache-2.0 license; read it before commercial use, in particular its terms for Model-as-a-Service businesses).
+libraries (LGPL).
 
 ## Credits
 
