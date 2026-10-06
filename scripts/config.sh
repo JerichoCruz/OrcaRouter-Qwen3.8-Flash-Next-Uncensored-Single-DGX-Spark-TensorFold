@@ -14,6 +14,11 @@ if [[ -f .env ]]; then
   done < .env
 fi
 
+# The checkpoint: MODEL_DIR, a local directory scripts/convert.sh makes from SOURCE_ID (the BF16 weights, downloaded
+# into the HF cache): MLX affine 4-bit in groups of 32 with the MTP head and the vision tower, byte for byte the
+# layout of Vontra's conversion of the official weights. MODEL_DIR= (empty) serves MODEL_ID from Hugging Face instead.
+SOURCE_ID="${SOURCE_ID:-orcarouter/Qwen3.8-Flash-Next-Uncensored}"
+MODEL_DIR="${MODEL_DIR-$HOME/models/Qwen3.8-Flash-Next-Uncensored-MLX-4bit-MTP}"
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"   # MLX 4-bit, group size 32, with the MTP head
 # The patches and start.sh's flags are made for TensorFold v0.6.1 exactly (17c73e1). After changing
 # TF_VERSION, TF_REPO or BASE_IMAGE, run `scripts/prepare.sh --rebuild`.
@@ -26,12 +31,12 @@ BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
 # de, fr, pt, ru; several: "zh,ja". See the README's "Other languages" section.
 DRAFT_LANGUAGE="${DRAFT_LANGUAGE:-}"
 IMAGE="${IMAGE:-tensorfold-qwen38:${TF_VERSION}${DRAFT_LANGUAGE:+-languages}}"   # the local image prepare.sh builds or pulls
-CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"          # the server's container
+CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-uncensored-tf}"   # the server's container
 # The prebuilt images: prepare.sh pulls $GHCR_IMAGE:<TF_VERSION>-<patches hash>; publish-image.sh pushes it (and
 # :latest, or :languages for the DRAFT_LANGUAGE image).
 GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold}"
 
-SERVED_NAME="${SERVED_NAME:-Qwen3.8-Flash-Next}"   # the model id clients see in /v1/models and replies (tensorfold --name)
+SERVED_NAME="${SERVED_NAME:-Qwen3.8-Flash-Next-Uncensored}"   # the model id clients see in /v1/models and replies (tensorfold --name)
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8888}"
 # Serving defaults (./start.sh arguments come after them and win). All streams share one memory pool (~103-104 GiB
@@ -96,6 +101,9 @@ HF_CACHE="${HF_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}}"
 KERNEL_CACHE="${KERNEL_CACHE:-$HOME/.cache/tensorfold-qwen38}"
 
 MIN_FREE_GB="${MIN_FREE_GB:-125}"   # free disk the checkpoint download needs (it is ~114 GB)
+CONVERT_FREE_GB="${CONVERT_FREE_GB:-470}"   # scripts/convert.sh: the BF16 source (~336 GB) and the output (~114 GB)
+CONVERT_MIN_GIB="${CONVERT_MIN_GIB:-24}"     # scripts/convert.sh: memory available for the conversion itself
+DOWNLOAD_MEMORY="${DOWNLOAD_MEMORY:-3g}"     # scripts/convert.sh: the download container's memory cap (docker --memory)
 IMAGE_FREE_GB="${IMAGE_FREE_GB:-35}"   # free disk under Docker's root that pulling or building the image needs
 
 # Colours only on a terminal.
@@ -105,6 +113,17 @@ warn() { printf '%s[%s] WARN:%s %s\n' "$(_c 2 '1;33')" "$(basename "$0")" "$(_c 
 die()  { printf '%s[%s] ERROR:%s %s\n' "$(_c 2 '1;31')" "$(basename "$0")" "$(_c 2 0)" "$*" >&2; exit 1; }
 
 model_cache_dir() { echo "$HF_CACHE/hub/models--${MODEL_ID//\//--}"; }
+# What tensorfold is given (MODEL_ARG; MODEL_DIR is mounted at /model), its name in messages, and whether it is there
+# (a MODEL_DIR counts once scripts/convert.sh finished and checked it: it writes .converted last).
+if [[ -n "$MODEL_DIR" ]]; then
+  MODEL_ARG=/model; MODEL_LABEL="$MODEL_DIR"; MODEL_MOUNT=(-v "$MODEL_DIR":/model:ro)
+else
+  MODEL_ARG="$MODEL_ID"; MODEL_LABEL="$MODEL_ID"; MODEL_MOUNT=()
+fi
+model_ready() {
+  if [[ -n "$MODEL_DIR" ]]; then [[ -f "$MODEL_DIR/.converted" ]]
+  else ls -d "$(model_cache_dir)"/snapshots/*/ >/dev/null 2>&1; fi
+}
 
 # start.sh and scripts/*.sh (not stop.sh, which must stop the server whatever the settings) check DRAFT_LANGUAGE.
 check_draft_language() {
@@ -123,6 +142,6 @@ prepared_state() {
   local hash label model=missing
   hash=$(patches_hash)
   label=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$IMAGE" 2>/dev/null || echo missing)
-  ls -d "$(model_cache_dir)"/snapshots/*/ >/dev/null 2>&1 && model=present
-  echo "model=$MODEL_ID($model) image=$IMAGE($label) patches=$hash"
+  model_ready && model=present
+  echo "model=$MODEL_LABEL($model) image=$IMAGE($label) patches=$hash"
 }

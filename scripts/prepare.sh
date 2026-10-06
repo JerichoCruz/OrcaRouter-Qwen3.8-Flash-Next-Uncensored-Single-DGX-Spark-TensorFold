@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Prepare everything needed to serve Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP with TensorFold on one DGX Spark:
+# Prepare everything needed to serve the checkpoint (MODEL_DIR, or MODEL_ID) with TensorFold on one DGX Spark:
 #   1. preflight checks (docker, GPU runtime, disk space)
 #   2. the image: TensorFold plus patches/*.patch (and patches/languages/*.patch with DRAFT_LANGUAGE) on NVIDIA's
 #      PyTorch container, pulled prebuilt from $GHCR_IMAGE when a matching tag is reachable (PULL=0 skips that), else
 #      built locally
-#   3. download the checkpoint into the Hugging Face cache (~106 GiB, resumable)
+#   3. MODEL_DIR (the default): convert it with scripts/convert.sh unless that is done (downloads the ~336 GB BF16
+#      SOURCE_ID, needs a Hugging Face token); MODEL_ID (MODEL_DIR=): download it into the Hugging Face cache
+#      (~106 GiB, resumable)
 #   4. verify the checkpoint with `tensorfold info`
 # ./start.sh runs this by itself when needed. Safe to re-run: every step skips work that is already done.
 # Pass --rebuild to rebuild the image from scratch.
@@ -44,7 +46,8 @@ built_hash=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$I
 free_gb() { df -BG --output=avail "$1" 2>/dev/null | tail -1 | tr -dc '0-9'; }
 fs_of()   { df --output=target "$1" 2>/dev/null | tail -1; }
 need_model=0; need_image=0
-[[ -d "$(model_cache_dir)/snapshots" ]] || need_model=$MIN_FREE_GB
+# (convert.sh checks its own, larger need)
+[[ -n "$MODEL_DIR" || -d "$(model_cache_dir)/snapshots" ]] || need_model=$MIN_FREE_GB
 [[ $REBUILD -eq 0 && "$built_hash" == "$PATCHES_HASH" ]] || need_image=$IMAGE_FREE_GB
 docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)
 if [[ -z "$docker_root" || "$(fs_of "$docker_root")" == "$(fs_of "$HF_CACHE")" ]]; then
@@ -118,28 +121,37 @@ tf_run() {
   local token=(); [[ -n "${HF_TOKEN:-}" ]] && token=(-e HF_TOKEN)
   docker run --rm --ipc=host --network host --entrypoint tensorfold "${token[@]}" \
     -v "$HF_CACHE":/root/.cache/huggingface \
-    -v "$KERNEL_CACHE":/cache \
+    -v "$KERNEL_CACHE":/cache "${MODEL_MOUNT[@]}" \
     "$IMAGE" "$@"
 }
 
-# ---------------------------------------------------------------- 3. download
-log "Downloading $MODEL_ID into $HF_CACHE/hub (resumes if interrupted)"
-if command -v hf >/dev/null; then
-  # Host CLI: resumable, parallel, writes the standard HF cache layout.
-  hf download "$MODEL_ID" --cache-dir "$HF_CACHE/hub"
+# ---------------------------------------------------------------- 3. checkpoint
+if [[ -n "$MODEL_DIR" ]]; then
+  if model_ready; then
+    log "Checkpoint: $MODEL_DIR ($(cat "$MODEL_DIR/.converted"))"
+  else
+    log "Checkpoint: $MODEL_DIR not converted yet, running scripts/convert.sh"
+    ./scripts/convert.sh
+  fi
 else
-  warn "host 'hf' CLI not found, downloading from inside the container"
-fi
-# `tensorfold pull` is the documented path; with the files already cached it only checks/completes them.
-tf_run pull "$MODEL_ID"
+  log "Downloading $MODEL_ID into $HF_CACHE/hub (resumes if interrupted)"
+  if command -v hf >/dev/null; then
+    # Host CLI: resumable, parallel, writes the standard HF cache layout.
+    hf download "$MODEL_ID" --cache-dir "$HF_CACHE/hub"
+  else
+    warn "host 'hf' CLI not found, downloading from inside the container"
+  fi
+  # `tensorfold pull` is the documented path; with the files already cached it only checks/completes them.
+  tf_run pull "$MODEL_ID"
 
-snapshot=$(ls -d "$(model_cache_dir)"/snapshots/*/ 2>/dev/null | head -1)
-[[ -n "$snapshot" ]] || die "no snapshot found under $(model_cache_dir)"
-log "Checkpoint: $snapshot ($(du -shL "$snapshot" | cut -f1))"
+  snapshot=$(ls -d "$(model_cache_dir)"/snapshots/*/ 2>/dev/null | head -1)
+  [[ -n "$snapshot" ]] || die "no snapshot found under $(model_cache_dir)"
+  log "Checkpoint: $snapshot ($(du -shL "$snapshot" | cut -f1))"
+fi
 
 # ---------------------------------------------------------------- 4. verify
 log "Verifying checkpoint with tensorfold info"
-tf_run info "$MODEL_ID"
+tf_run info "$MODEL_ARG"
 
 prepared_state > "$PREPARED_MARKER"
 log "Done. Start the server with ./start.sh (port $PORT)."

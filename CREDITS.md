@@ -7,10 +7,16 @@ This repository is a thin layer of scripts and patches. Almost everything that m
 - **[Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)** by [Qwen](https://qwen.ai/): the model's
   design, training and evaluations. Released under the **Qwen Community License 1.0**, which governs any use of the
   weights (read it before commercial use, in particular its terms for Model-as-a-Service businesses). The weights are
-  not part of this repository; `scripts/prepare.sh` downloads them from Hugging Face.
-- **[Vontra](https://huggingface.co/Vontra)**: the checkpoint served here,
+  not part of this repository; `scripts/convert.sh` downloads the source from Hugging Face.
+- **[orcarouter](https://huggingface.co/orcarouter)**: the checkpoint served here,
+  [`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored):
+  the BF16 uncensored (refusal-removed) weights, released under **Apache 2.0**, which `scripts/convert.sh` converts
+  to the MLX-4bit layout this recipe serves.
+- **[Vontra](https://huggingface.co/Vontra)**: the reference conversion,
   [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP): the MLX
-  4-bit conversion, the preserved native MTP draft head, validation and packaging.
+  4-bit conversion of the official weights with the preserved native MTP draft head. This recipe's converter
+  (`tools/convert_flash_next.py`) reproduces its layout **byte for byte**; `tools/check_flash_next.py` compares
+  against it.
 
 ## Inference engine
 

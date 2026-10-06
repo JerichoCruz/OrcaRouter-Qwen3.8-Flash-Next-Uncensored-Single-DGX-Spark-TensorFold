@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Serve Qwen3.8 Flash Next (Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP) with TensorFold on one DGX Spark, end to end:
-# runs scripts/prepare.sh when the image or the checkpoint is not ready yet (first run, or after patches change),
+# Serve Qwen3.8 Flash Next Uncensored (MODEL_DIR, converted from orcarouter/Qwen3.8-Flash-Next-Uncensored) with
+# TensorFold on one DGX Spark, end to end: runs scripts/prepare.sh when the image or the checkpoint is not ready yet
+# (first run: pulls the image, downloads and converts the checkpoint; or after patches change),
 # launches `tensorfold serve` on port 8888, waits until the OpenAI API answers, then runs a smoke test.
 # Stop it with ./stop.sh.
 #
@@ -17,7 +18,7 @@
 # Extra arguments come after the defaults, so they win (the last value of a flag counts).
 # Settings, from the environment or ./.env (KEY=value lines): PARALLEL, CONTEXT, KV_DTYPE, DRAFT_LANGUAGE, PLE_ON_SSD,
 #      VISION, VISION_URLS, VISION_MAX_IMAGES, MTP_DRAFTS, MTP_CONFIDENCE, TEMPERATURE, TOP_P, TOP_K, THINKING,
-#      MAX_TOKENS, SERVED_NAME, PORT, HOST, CONTAINER_NAME, IMAGE (see scripts/config.sh); TENSORFOLD_* (passed to the server);
+#      MAX_TOKENS, SERVED_NAME, PORT, HOST, CONTAINER_NAME, IMAGE, MODEL_DIR, SOURCE_ID, MODEL_ID (see scripts/config.sh); TENSORFOLD_* (passed to the server);
 #      PREPARE (auto | 1 | 0); FOREGROUND=1 (stay attached, exit with the server's code); WAIT_TIMEOUT (seconds,
 #      default 1800); HF_HUB_OFFLINE=0 (let TensorFold reach the Hub; default serves from the local cache only)
 set -euo pipefail
@@ -73,7 +74,7 @@ source ./scripts/banner.sh
 echo
 banner                                             # the TensorFold ribbon and MIA AI LAB (terminals only)
 printf '\n%s  Mia'"'"'s TensorFold Start Script%s\n' "$M" "$R"
-printf '%s  %s · %s x %s tokens · %s KV · port %s%s\n\n' "$D" "$MODEL_ID" "$(arg_value --parallel)" \
+printf '%s  %s · %s x %s tokens · %s KV · port %s%s\n\n' "$D" "$MODEL_LABEL" "$(arg_value --parallel)" \
   "$(arg_value --context)" "$(arg_value --kv-dtype)" "$PORT" "$R"
 STEPS=5
 step() { printf '%s[%s/%s]%s %s%s%s\n' "$M" "$1" "$STEPS" "$R" "$B" "$2" "$R"; }
@@ -95,21 +96,21 @@ fi
 # the first run, new patches, another model or image. PREPARE=1 forces it, PREPARE=0 skips it.
 step 1 "Setup: image and checkpoint"
 if [[ "${PREPARE:-auto}" == 1 || ( "${PREPARE:-auto}" != 0 && "$(prepared_state 2>/dev/null)" != "$(cat "$PREPARED_MARKER" 2>/dev/null)" ) ]]; then
-  log "Not ready yet: running scripts/prepare.sh (the first time this pulls the image and downloads ~106 GiB)"
+  log "Not ready yet: running scripts/prepare.sh (the first time this pulls the image, downloads and converts the checkpoint)"
   ./scripts/prepare.sh
 else
-  log "Ready: $IMAGE and $MODEL_ID${PREPARE:+ (PREPARE=$PREPARE)}"
+  log "Ready: $IMAGE and $MODEL_LABEL${PREPARE:+ (PREPARE=$PREPARE)}"
 fi
 why="scripts/prepare.sh did not"; [[ "${PREPARE:-auto}" == 0 ]] && why="PREPARE=0 skipped scripts/prepare.sh, which would"
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "image $IMAGE missing: $why build it"
-ls -d "$(model_cache_dir)"/snapshots/*/ >/dev/null 2>&1 || die "$MODEL_ID not in $HF_CACHE: $why download it"
+model_ready || die "$MODEL_LABEL is not ready: $why download or convert it"
 
 # ---------------------------------------------------------------- 2. checks
 step 2 "Checks: arguments, previous server, port, memory"
 # tensorfold's own parser, in a throwaway container without the GPU: a typo fails here, before anything is stopped
 docker run --rm --entrypoint python "$IMAGE" -c \
   'import sys; from tensorfold.cli import build_parser; build_parser().parse_args(sys.argv[1:])' \
-  serve "$MODEL_ID" --host "$HOST" --port "$PORT" "${SERVE_ARGS[@]}" >/dev/null ||
+  serve "$MODEL_ARG" --host "$HOST" --port "$PORT" "${SERVE_ARGS[@]}" >/dev/null ||
   die "tensorfold serve rejects these arguments (see above); nothing was changed"
 if [[ "$MODE" == restart ]] && running; then          # after the setup and the checks: down only while restarting
   ./stop.sh
@@ -137,7 +138,7 @@ while IFS='=' read -r name _; do ENV_ARGS+=(-e "$name"); done < <(env | grep -E 
 
 # ---------------------------------------------------------------- 3. launch
 step 3 "Launch: container $CONTAINER_NAME"
-log "tensorfold serve $MODEL_ID --host $HOST --port $PORT ${SERVE_ARGS[*]}"
+log "tensorfold serve $MODEL_ARG --host $HOST --port $PORT ${SERVE_ARGS[*]}"
 # No token goes into the container: serving reads only the local cache (HF_HUB_OFFLINE=1), and with
 # HF_HUB_OFFLINE=0 huggingface_hub finds the token file in the mounted cache.
 docker run -d --name "$CONTAINER_NAME" \
@@ -145,9 +146,9 @@ docker run -d --name "$CONTAINER_NAME" \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   -e HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "${ENV_ARGS[@]}" \
   -v "$HF_CACHE":/root/.cache/huggingface \
-  -v "$KERNEL_CACHE":/cache \
+  -v "$KERNEL_CACHE":/cache "${MODEL_MOUNT[@]}" \
   "$IMAGE" \
-  tensorfold serve "$MODEL_ID" --host "$HOST" --port "$PORT" "${SERVE_ARGS[@]}" >/dev/null
+  tensorfold serve "$MODEL_ARG" --host "$HOST" --port "$PORT" "${SERVE_ARGS[@]}" >/dev/null
 
 if [[ "${FOREGROUND:-0}" == 1 ]]; then
   trap './stop.sh; exit 130' INT TERM

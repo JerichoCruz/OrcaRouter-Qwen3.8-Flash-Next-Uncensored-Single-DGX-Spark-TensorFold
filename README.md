@@ -1,7 +1,7 @@
 <h1 align="center">Qwen3.8 Flash Next on one DGX Spark (TensorFold)</h1>
 
 <p align="center">
-  <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
+  <sub>a fork of <a href="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold">MiaAI-Lab's Qwen3.8 Flash Next recipe</a> by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
   <br><br>
   <a href="https://github.com/sponsors/MiaAI-Lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Sponsor%20me%20on%20GitHub-181717?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor me on GitHub" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
   <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
@@ -13,17 +13,43 @@ Serve **Qwen3.8 Flash Next** from a single NVIDIA DGX Spark (GB10, 128 GB) throu
 `patches/0002-flash-next-v061.patch` (video input and many images on TensorFold's Flash Next vision, copy drafts,
 SSD read-ahead, first token before the next draft).
 
-- Checkpoint: [`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP)
-  (MLX 4-bit, group size 32, with the MTP draft head)
-- API model id: `Qwen3.8-Flash-Next`
+- Checkpoint: [`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored)
+  (BF16; converted on first run to MLX 4-bit, group size 32, with the MTP draft head and the vision tower kept)
+- API model id: `Qwen3.8-Flash-Next-Uncensored`
 - KV pool: **1,310,720 tokens** (5 streams x 262,144, int8 KV cache, ~23.4 GiB), 25% more than 4 streams
 - Images and videos in chat messages (`image_url` / `video_url` parts), see [Images and video](#images-and-video)
 - One command: `./start.sh` sets everything up on the first run and starts the server; `./stop.sh` stops it
 
+### Why this recipe
+
+This is a **fork of [MiaAI-Lab's Qwen3.8 Flash Next recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold)**
+that serves the **uncensored** variant of the model instead, by converting
+[`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored)
+locally. It keeps everything the upstream recipe does — the same TensorFold pin, patches, serving defaults and
+validation — and changes only the checkpoint.
+
+Two things make the local conversion necessary:
+
+- **The uncensored checkpoint ships in BF16** (336 GB), not in the MLX 4-bit / group-32 layout that TensorFold's
+  Flash Next CUDA engine reads, so it cannot be served as-is.
+- **The ready-made quantizations that do exist don't fit.** orcarouter's own `...-Uncensored-MLX` is group 64 with
+  the experts and the n-gram table left in BF16 (163 GB — too large for the 128 GB Spark), and its `...-NVFP4`
+  is a different format entirely.
+
+So [the recipe converts on first run](#convert): it downloads the BF16 source, turns it **directly into the
+MLX-layout affine 4-bit / group-32 format** that Vontra's conversion of the official weights uses, keeps the MTP
+draft head and the vision tower, and verifies the result byte for byte against that reference. The uncensoring
+itself is orcarouter's (a refusal-removed edit to the residual writers; it changes values, not the architecture), so
+the resulting checkpoint is the same layout, size and dtype as the upstream recipe's — and the memory and KV
+defaults that fit it are unchanged. See orcarouter's
+[model card](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored) for the uncensoring and its license.
+
 ## Performance
 
 One DGX Spark, the recipe's defaults on TensorFold v0.6.1 (5 streams x 262,144, int8 KV cache, n-gram tables read
-from SSD, image input on, MTP drafting), measured through the OpenAI API.
+from SSD, image input on, MTP drafting), measured through the OpenAI API. Measured on Vontra's conversion of the
+official weights; the uncensored checkpoint is the same layout and size, so the tables are the reference here too
+(`tools/bench.py` re-measures it).
 
 **Decode, prose**
 
@@ -63,35 +89,41 @@ every reply byte-identical. A new question on a long shared system prompt reuses
 - A DGX Spark (or another GB10 system with 128 GB unified memory) with nothing else large on the GPU: the default
   setting needs ~103 GiB free when the server starts (see [KV pool and memory](#kv-pool-and-memory)).
 - Docker with the NVIDIA container runtime, and your user in the `docker` group.
-- ~160 GB free disk on a fresh machine: ~125 GB for the checkpoint download under `~/.cache/huggingface`
-  (~114 GB) and ~35 GB for the image under Docker's root (~24 GB); `scripts/prepare.sh` checks both.
-- Optional: the `hf` CLI on the host (faster, resumable download) and a Hugging Face token in
-  `~/.cache/huggingface/token` or `HF_TOKEN`.
+- ~160 GB free disk for the *served* checkpoint and the image: ~125 GB for the converted checkpoint under
+  `~/.cache/huggingface` (~114 GB) and ~35 GB for the image under Docker's root (~24 GB). Converting from the
+  BF16 source also needs ~470 GB free in total under the Hugging Face cache while it runs (the ~336 GB source and
+  the ~114 GB output); `scripts/convert.sh` checks this (`CONVERT_FREE_GB`).
+- A Hugging Face token in `~/.cache/huggingface/token` or `HF_TOKEN`: the source
+  [`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored)
+  is auto-gated, so accept its terms on Hugging Face once, then download.
+- ~24 GiB of memory free for the conversion itself (the BF16 source is read on the GPU; `CONVERT_MIN_GIB`).
+  Run the download next to a server (see [Convert](#convert)); stop it before converting.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold.git
-cd Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold
+git clone https://github.com/JerichoCruz/OrcaRouter-Qwen3.8-Flash-Next-Uncensored-Single-DGX-Spark-TensorFold.git
+cd OrcaRouter-Qwen3.8-Flash-Next-Uncensored-Single-DGX-Spark-TensorFold
 ./start.sh
 ```
 
-That is all. The first run sets everything up (see below): it pulls the prebuilt image (~11 GB) and downloads the
-~106 GiB checkpoint, then compiles the CUDA kernels for the GB10 (a few minutes, once). Later starts take ~2.5 minutes to load the
+That is all. The first run sets everything up (see below): it pulls the prebuilt image (~11 GB), downloads the
+~336 GiB BF16 source into the Hugging Face cache and converts it to the ~106 GiB MLX-4bit layout this recipe serves,
+then compiles the CUDA kernels for the GB10 (a few minutes, once). Later starts take ~2.5 minutes to load the
 weights. `start.sh` shows each step, the server's log and the loading progress, runs a smoke test, prints
-`Qwen3.8-Flash-Next is now LIVE! on port 8888` with the endpoint, and returns you to the shell.
+`Qwen3.8-Flash-Next-Uncensored is now LIVE! on port 8888` with the endpoint, and returns you to the shell.
 
 ```bash
 curl -s http://<spark-address>:8888/v1/models
 
 curl -s http://<spark-address>:8888/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "Qwen3.8-Flash-Next",
+  "model": "Qwen3.8-Flash-Next-Uncensored",
   "messages": [{"role": "user", "content": "Write a Python fibonacci function."}],
   "max_tokens": 1000
 }'
 ```
 
-Any OpenAI client works with `base_url = "http://<spark-address>:8888/v1"` and the model `Qwen3.8-Flash-Next`.
+Any OpenAI client works with `base_url = "http://<spark-address>:8888/v1"` and the model `Qwen3.8-Flash-Next-Uncensored`.
 Streaming, tool calls (typed parameters, e.g. arrays come back as JSON arrays), reasoning content, images and
 videos are supported. The model thinks before it answers (`reasoning_content`), so give replies enough `max_tokens`;
 a request without one gets `MAX_TOKENS` (32,768).
@@ -99,7 +131,7 @@ a request without one gets `MAX_TOKENS` (32,768).
 ```bash
 ./start.sh restart                            # restart it, e.g. after changing a setting
 ./stop.sh                                     # stop the server and free the GPU memory
-docker logs -f qwen38-flash-next-tf           # server log
+docker logs -f qwen38-flash-next-uncensored-tf   # server log
 curl -s http://<spark-address>:8888/health    # busy flag and live token totals
 ```
 
@@ -112,7 +144,7 @@ content parts in a user message:
 ```bash
 IMG=$(base64 -w0 photo.jpg)
 curl -s http://<spark-address>:8888/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "Qwen3.8-Flash-Next",
+  "model": "Qwen3.8-Flash-Next-Uncensored",
   "messages": [{"role": "user", "content": [
     {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,'"$IMG"'"}},
     {"type": "text", "text": "What is in this picture?"}]}],
@@ -163,6 +195,33 @@ The larger list makes every draft step a little slower, which is why it does not
 recommended. The language token lists come from the vLLM recipe's language draft vocabularies; see
 [`CREDITS.md`](CREDITS.md).
 
+## Convert
+
+The checkpoint this recipe serves is built on first run, by
+[`scripts/convert.sh`](scripts/convert.sh) from the BF16 source
+[`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored)
+(336 GB, 131 shards). It converts **directly from BF16 to the MLX-layout affine 4-bit, group size 32** that
+TensorFold's Flash Next CUDA engine reads, keeping the **MTP draft head** and the **vision tower**, and packs the
+result into `$MODEL_DIR` (`~models/Qwen3.8-Flash-Next-Uncensored-MLX-4bit-MTP` by default). The source stays in the
+Hugging Face cache; `MODEL_DIR=` (empty) makes the recipe serve `MODEL_ID` from Hugging Face instead, as before.
+
+- The download is safe next to another running server (e.g. a vLLM one): it runs in a container capped at
+  `DOWNLOAD_MEMORY` and uses no GPU. Run `scripts/convert.sh --download-only`, then stop that server and run
+  `./start.sh` (or `scripts/convert.sh`) to finish the conversion and serve.
+- The conversion holds a few source tensors, their fp32 copies on the GPU and an output shard, so the server must be
+  stopped first (`scripts/convert.sh` refuses to run while the server container is up; `CONVERT_MIN_GIB`, default
+  24). The output matches Vontra's conversion of the official weights **byte for byte** — the same layout, the same
+  sizes, the same dtypes — so the memory and KV defaults are unchanged.
+- `tools/check_flash_next.py` verifies the output: `sample` compares 51 sampled tensors against Vontra's conversion
+  (over HTTP range reads, no full download), and `layout OUT_DIR` compares the output index's names, shapes and
+  dtypes against Vontra's 3,747 entries. `scripts/convert.sh` runs the layout check and `tensorfold info` before it
+  marks the directory converted.
+
+```bash
+scripts/convert.sh --download-only    # download the BF16 source next to a running server
+./start.sh                            # convert, check, then serve  (or scripts/convert.sh, then ./start.sh)
+```
+
 ## What `start.sh` and `scripts/prepare.sh` do
 
 **`./start.sh`** works in five steps, each shown as it runs:
@@ -195,15 +254,18 @@ attached to the server's log and exits with its exit code (for a systemd unit).
    Container Registry (`ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold:v0.6.1-<patches hash>`,
    ~11 GB; `:latest` is the default image, `:languages` the language image); if that tag is not there (e.g. after
    you change `patches/`), or with `PULL=0`, it builds the image locally instead (a few minutes).
-3. Downloads the checkpoint into `~/.cache/huggingface` (resumable).
+3. Runs `scripts/convert.sh` when `MODEL_DIR` is not converted yet: downloads the BF16 source into
+   `~/.cache/huggingface` (resumable), converts it to the MLX-4bit layout, checks it and marks it converted (see
+   [Convert](#convert)).
 4. Verifies the checkpoint with `tensorfold info`.
 
-Run it yourself to download ahead of time or to rebuild the image from scratch:
+Run it yourself to convert or to rebuild the image from scratch:
 
 ```bash
-scripts/prepare.sh             # set up without starting the server
-scripts/prepare.sh --rebuild   # rebuild the image from scratch
-PREPARE=1 ./start.sh restart   # force prepare.sh, then restart; PREPARE=0 skips the check
+scripts/prepare.sh                       # set up without starting the server
+scripts/prepare.sh --rebuild             # rebuild the image from scratch
+scripts/convert.sh --download-only       # download the BF16 source next to a running server
+PREPARE=1 ./start.sh restart             # force prepare.sh, then restart; PREPARE=0 skips the check
 ```
 
 After changing `patches/`, `scripts/publish-image.sh` pushes the new image to GitHub Container Registry
@@ -282,7 +344,7 @@ wins over it), or with `tensorfold serve` flags (`./start.sh --context 131072`).
 | `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `0.95` / `20` | default sampling (Qwen's thinking-mode values); a request's own values win |
 | `THINKING` | `1` | open a think block by default; `0` answers directly unless a request asks to think |
 | `MAX_TOKENS` | `32768` | reply length for a request without `max_tokens` (TensorFold's own default, 4,096, can end a thinking reply before it answers); clamped to the stream's window |
-| `SERVED_NAME` | `Qwen3.8-Flash-Next` | the model id in `/v1/models` and in replies |
+| `SERVED_NAME` | `Qwen3.8-Flash-Next-Uncensored` | the model id in `/v1/models` and in replies |
 | `PORT` / `HOST` | `8888` / `0.0.0.0` | where the API listens |
 | `VISION_MAX_IMAGES` | `50` | images a request may carry, all of a chat's turns counted (`--vision-max-images`) |
 | `TENSORFOLD_PREFILL_ROWS` | `2048` with `PLE_ON_SSD=1` | prompt piece rows, admitted at startup (256 to 16,384). Empty lets TensorFold choose (4,096 while idle without vision), which measured 10-30% slower from 5k to 16k tokens with the n-gram tables on SSD |
@@ -356,11 +418,12 @@ from this machine or another one (`API_URL=http://<spark-address>:8888 tools/ben
 ```
 start.sh      set up (first run) and start the server
 stop.sh       stop it
-scripts/      prepare.sh (image + checkpoint), config.sh (all settings), publish-image.sh (push the image to GHCR),
-              banner.sh (start.sh's banner)
+scripts/      prepare.sh (image + checkpoint), convert.sh (download + convert the BF16 source), config.sh
+              (all settings), publish-image.sh (push the image to GHCR), banner.sh (start.sh's banner)
 patches/      patches baked into the image; patches/languages/ only into the language image (DRAFT_LANGUAGE)
-tools/        benchmark and checks
+tools/        benchmark, checks, the converter and its checker (convert_flash_next.py, check_flash_next.py)
 .github/      issue and pull request templates, GitHub Sponsors
+docs/         notes on TensorFold and the server behavior
 CREDITS.md    who and what this builds on
 ```
 
@@ -377,9 +440,18 @@ which the container prints at every start (it shows in `start.sh`'s output); by 
 accept them. The image also contains Hugging Face `transformers` (Apache 2.0) and PyAV (BSD) with its FFmpeg
 libraries (LGPL). The MIT license above covers this repository's scripts and patches only.
 
+The served checkpoint, converted from
+[`orcarouter/Qwen3.8-Flash-Next-Uncensored`](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored) (Apache
+2.0) and layered on Qwen's weights, is not part of this repository; it is downloaded from Hugging Face at first run.
+The model weights themselves are under the Qwen Community License 1.0 (the uncensored checkpoint carries its own
+Apache-2.0 license; read it before commercial use, in particular its terms for Model-as-a-Service businesses).
+
 ## Credits
 
-Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart ([ashhart](https://github.com/ashhart)), [Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
-by Qwen, and [Vontra's MLX 4-bit checkpoint](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP), with a
-prompt-chunk change by [MovieMaker93](https://github.com/MovieMaker93) ([TensorFold #40](https://github.com/ashhart/TensorFold/pull/40)). The full list,
+This recipe is a fork of [MiaAI-Lab's Qwen3.8 Flash Next recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold),
+which adds the local conversion of the uncensored checkpoint. Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart ([ashhart](https://github.com/ashhart)), [Qwen3.8 Flash Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
+by Qwen, [orcarouter's uncensored checkpoint](https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored), and
+[Vontra's MLX 4-bit conversion](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP) (the reference this
+recipe's converter matches byte for byte), with a prompt-chunk change by
+[MovieMaker93](https://github.com/MovieMaker93) ([TensorFold #40](https://github.com/ashhart/TensorFold/pull/40)). The full list,
 including the runtime stack and licenses, is in [`CREDITS.md`](CREDITS.md).

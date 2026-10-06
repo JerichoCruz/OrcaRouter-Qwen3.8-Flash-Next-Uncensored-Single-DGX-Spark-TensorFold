@@ -7,6 +7,23 @@ release ends at is given, and the prebuilt images are
 
 ## [Unreleased]
 
+### Changed
+
+- The recipe now serves the **uncensored** checkpoint: `SOURCE_ID` is
+  `orcarouter/Qwen3.8-Flash-Next-Uncensored` (BF16), converted on first run to the MLX-layout affine 4-bit / group
+  32 this recipe reads, keeping the MTP head and the vision tower. `scripts/convert.sh` downloads the source into the
+  HF cache and converts it into `MODEL_DIR` (`~models/Qwen3.8-Flash-Next-Uncensored-MLX-4bit-MTP`); `./start.sh` and
+  `scripts/prepare.sh` run it when the directory is not converted yet. `SERVED_NAME` and `CONTAINER_NAME` now default
+  to `Qwen3.8-Flash-Next-Uncensored` / `qwen38-flash-next-uncensored-tf`.
+- `MODEL_DIR=` (empty) restores the old behaviour: serve `MODEL_ID` (`Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`) from
+  Hugging Face.
+
+### Added
+
+- `tools/convert_flash_next.py` (BF16 → MLX affine 4-bit / group 32, MTP and vision kept, byte-for-byte the layout
+  of Vontra's conversion of the official weights), `tools/check_flash_next.py` (`sample` byte-exact check over HTTP
+  range reads, `layout` check against Vontra's 3,747 entries), and `scripts/convert.sh`.
+
 ## [0.6.0] - 2026-10-02
 
 Commit `22a3010` (#13). Images unchanged from 0.5.0.
